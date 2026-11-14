@@ -23,8 +23,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private let pager = KeyboardPagingScrollView()
     private let pageStrip = UIStackView()
     private weak var modeSelector: UISegmentedControl?
-    private weak var normalHeader: UIStackView?
-    private weak var pinyinHeader: UIStackView?
+    /// Second row while pinyin is being typed: spelling, candidates, expand.
+    private weak var pinyinLine: UIStackView?
     private var pageWidth: CGFloat = 0
     private var centeringPages = false
     private var changingPage = false
@@ -35,7 +35,6 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private weak var candidateScroll: UIScrollView?
     private var candidateWidths: [NSLayoutConstraint] = []
     private weak var compositionLabel: UILabel?
-    private let compositionViewport = UIScrollView()
     private var lastSpaceAt = Date.distantPast
     private var spaceCommittedComposition = false
     private weak var expandCandidatesButton: UIButton?
@@ -183,9 +182,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         showsSwitchFooter = appeared && extensionContext != nil && needsInputModeSwitchKey
         switchFooter?.isHidden = !showsSwitchFooter
         globe?.isHidden = !showsSwitchFooter
-        // The letter pages are taller by the suggestion bar. While pinyin is
-        // being typed its candidates use that room, so the height stays put.
-        let height: CGFloat = 272 + (mode == .voice ? 0 : 38) + (showsSwitchFooter ? 52 : 0) + (hotEditor == nil ? 0 : 144)
+        // Every page has the same three regions: button bar, suggestion
+        // strip, keys. The voice page keeps the strip empty, so switching
+        // pages never changes the panel's height.
+        let height: CGFloat = 310 + (showsSwitchFooter ? 52 : 0) + (hotEditor == nil ? 0 : 144)
         if heightConstraint?.constant != height {
             heightConstraint?.constant = height
             view.invalidateIntrinsicContentSize(); view.setNeedsLayout()
@@ -350,79 +350,83 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         hide.accessibilityHint = "收起后点一下输入框即可再次打开"
         let headerSpace = UIView()
         headerSpace.setContentHuggingPriority(UILayoutPriority(1), for: .horizontal)
-        let header = row([brand, undo, headerSpace, mic, hide, selector], equal: false); header.alignment = .center
+        // The hide button is the right-most control; the page selector sits
+        // to its left. This row never changes, whatever is being typed.
+        let header = row([brand, undo, headerSpace, mic, selector, hide], equal: false); header.alignment = .center
         let headerHeight = header.heightAnchor.constraint(equalToConstant: 32)
         headerHeight.priority = .defaultHigh; headerHeight.isActive = true
-        normalHeader = header
         content.addArrangedSubview(header)
-        let composition = Lab.label("", size: 18, color: .white)
+        // Second row, present on every page. Letter pages show next-word
+        // suggestions here, or the pinyin being typed with its candidates.
+        // The voice page leaves it empty apart from the line delete key.
+        let composition = Lab.label("", size: 15, color: Lab.muted)
         composition.accessibilityIdentifier = "pinyin-composition"
         composition.numberOfLines = 1
-        composition.lineBreakMode = .byClipping
-        composition.translatesAutoresizingMaskIntoConstraints = false
-        compositionViewport.addSubview(composition)
-        compositionViewport.showsHorizontalScrollIndicator = false
-        compositionViewport.accessibilityIdentifier = "pinyin-composition-scroll"
-        compositionViewport.delaysContentTouches = false
-        compositionViewport.heightAnchor.constraint(equalToConstant: 24).isActive = true
-        NSLayoutConstraint.activate([
-            composition.leadingAnchor.constraint(equalTo: compositionViewport.contentLayoutGuide.leadingAnchor),
-            composition.trailingAnchor.constraint(equalTo: compositionViewport.contentLayoutGuide.trailingAnchor),
-            composition.topAnchor.constraint(equalTo: compositionViewport.contentLayoutGuide.topAnchor),
-            composition.bottomAnchor.constraint(equalTo: compositionViewport.contentLayoutGuide.bottomAnchor),
-            composition.heightAnchor.constraint(equalTo: compositionViewport.frameLayoutGuide.heightAnchor)
-        ])
+        // A long spelling keeps its newest letters in view.
+        composition.lineBreakMode = .byTruncatingHead
+        composition.setContentHuggingPriority(.required, for: .horizontal)
+        composition.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         compositionLabel = composition
         let candidatesScroll = KeyboardPagingScrollView(); candidatesScroll.showsHorizontalScrollIndicator = false
         candidatesScroll.delaysContentTouches = false
         candidatesScroll.accessibilityIdentifier = "pinyin-candidates"; candidateScroll = candidatesScroll
         let candidates = UIStackView(); candidates.axis = .horizontal; candidates.spacing = 6
         candidates.translatesAutoresizingMaskIntoConstraints = false; candidatesScroll.addSubview(candidates)
-        NSLayoutConstraint.activate([
-            candidates.topAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.topAnchor),
-            candidates.bottomAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.bottomAnchor),
-            candidates.leadingAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.leadingAnchor),
-            candidates.trailingAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.trailingAnchor),
-            candidates.heightAnchor.constraint(equalTo: candidatesScroll.frameLayoutGuide.heightAnchor)
-        ])
         candidateRow = candidates
         let expand = Lab.button("", symbol: "chevron.down") { [weak self] in
             guard let self = self else { return }; self.setCandidatesExpanded(!self.candidatesExpanded)
         }
         expand.configuration?.contentInsets = .zero
         expand.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        expand.heightAnchor.constraint(equalToConstant: 30).isActive = true
         expand.accessibilityIdentifier = "pinyin-expand-candidates"
+        expand.setContentCompressionResistancePriority(UILayoutPriority(600), for: .vertical)
         expandCandidatesButton = expand
-        let candidateLine = row([candidatesScroll, expand], equal: false)
+        let candidateLine = row([composition, candidatesScroll, expand], equal: false)
+        candidateLine.spacing = 6
         candidateLine.accessibilityIdentifier = "pinyin-candidate-line"
-        candidateLine.heightAnchor.constraint(equalToConstant: 32).isActive = true
-        let candidateHeader = UIStackView(arrangedSubviews: [compositionViewport, candidateLine])
-        candidateHeader.axis = .vertical
-        candidateHeader.accessibilityIdentifier = "pinyin-two-line-header"
-        let candidateHeight = candidateHeader.heightAnchor.constraint(equalToConstant: 56)
-        candidateHeight.priority = .defaultHigh; candidateHeight.isActive = true
-        candidateHeader.isHidden = true; pinyinHeader = candidateHeader
-        content.addArrangedSubview(candidateHeader)
+        candidateLine.isHidden = true; pinyinLine = candidateLine
         suggestionScroll.showsHorizontalScrollIndicator = false
         suggestionScroll.delaysContentTouches = false
         suggestionScroll.accessibilityIdentifier = "suggestion-bar"
         suggestionRow.axis = .horizontal; suggestionRow.spacing = 6
         suggestionRow.translatesAutoresizingMaskIntoConstraints = false; suggestionScroll.addSubview(suggestionRow)
+        suggestionScroll.isHidden = true
+        let stripContent = UIView()
+        for item in [suggestionScroll, candidateLine] as [UIView] {
+            item.translatesAutoresizingMaskIntoConstraints = false; stripContent.addSubview(item)
+            NSLayoutConstraint.activate([
+                item.topAnchor.constraint(equalTo: stripContent.topAnchor),
+                item.bottomAnchor.constraint(equalTo: stripContent.bottomAnchor),
+                item.leadingAnchor.constraint(equalTo: stripContent.leadingAnchor),
+                item.trailingAnchor.constraint(equalTo: stripContent.trailingAnchor)
+            ])
+        }
+        // Directly below the hide button and away from the letter keys, so
+        // a whole line is not deleted by a slip of the thumb.
+        let lineDelete = lineDeleteKey()
+        lineDelete.setContentCompressionResistancePriority(UILayoutPriority(600), for: .vertical)
+        let strip = row([stripContent, lineDelete], equal: false)
+        strip.accessibilityIdentifier = "keyboard-strip"
         // Below the header's priority: when the host squeezes the keyboard,
-        // the bar gives up its room before any key does.
-        let suggestionHeight = suggestionScroll.heightAnchor.constraint(equalToConstant: 30)
-        suggestionHeight.priority = UILayoutPriority(700)
+        // the strip gives up its room before any key does.
+        let stripHeight = strip.heightAnchor.constraint(equalToConstant: 30)
+        stripHeight.priority = UILayoutPriority(700)
         NSLayoutConstraint.activate([
+            candidates.topAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.topAnchor),
+            candidates.bottomAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.bottomAnchor),
+            candidates.leadingAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.leadingAnchor),
+            candidates.trailingAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.trailingAnchor),
+            candidates.heightAnchor.constraint(equalTo: candidatesScroll.frameLayoutGuide.heightAnchor),
+            composition.widthAnchor.constraint(lessThanOrEqualTo: candidateLine.widthAnchor, multiplier: 0.34),
             suggestionRow.topAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.topAnchor),
             suggestionRow.bottomAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.bottomAnchor),
             suggestionRow.leadingAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.leadingAnchor),
             suggestionRow.trailingAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.trailingAnchor),
             suggestionRow.heightAnchor.constraint(equalTo: suggestionScroll.frameLayoutGuide.heightAnchor),
-            suggestionHeight
+            lineDelete.widthAnchor.constraint(equalToConstant: 38),
+            stripHeight
         ])
-        suggestionScroll.isHidden = true
-        content.addArrangedSubview(suggestionScroll)
+        content.addArrangedSubview(strip)
         pager.delegate = self; pager.isPagingEnabled = true; pager.bounces = false
         pager.alwaysBounceVertical = false; pager.showsVerticalScrollIndicator = false
         pager.showsHorizontalScrollIndicator = false; pager.isDirectionalLockEnabled = true
@@ -496,14 +500,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         voiceButton = mic; voiceContainer = container; updateVoice()
         let micLeft = UIView(), micRight = UIView()
         let micRow = row([micLeft, container, micRight], equal: false)
-        let lineDelete = lineDeleteKey()
-        lineDelete.translatesAutoresizingMaskIntoConstraints = false; micRight.addSubview(lineDelete)
-        NSLayoutConstraint.activate([
-            micLeft.widthAnchor.constraint(equalTo: micRight.widthAnchor),
-            lineDelete.trailingAnchor.constraint(equalTo: micRight.trailingAnchor),
-            lineDelete.centerYAnchor.constraint(equalTo: micRight.centerYAnchor)
-        ])
         content.addArrangedSubview(micRow)
+        micLeft.widthAnchor.constraint(equalTo: micRight.widthAnchor).isActive = true
         content.addArrangedSubview(keyRow([
             key("space") { [weak self] in self?.space() },
             key("@") { [weak self] in self?.input("@") }, deleteKey()
@@ -1083,9 +1081,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         enter.configuration?.title = ""; enter.configuration?.image = UIImage(systemName: "return")
         enter.configuration?.baseBackgroundColor = UIColor(white: 0.94, alpha: 1)
         enter.configuration?.baseForegroundColor = .black
-        // The letter rows leave no room above the delete key, so on these
-        // pages the line delete sits in the bottom row next to Return.
-        content.addArrangedSubview(keyRow([number, space, lineDeleteKey(), enter], equal: false))
+        content.addArrangedSubview(keyRow([number, space, enter], equal: false))
     }
     private func returnKey() -> UIButton {
         let button = key("return") { [weak self] in
@@ -1152,8 +1148,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         }
     }
     private func refreshSuggestions() {
-        // Typing a pinyin letter withdraws the suggestions: the candidate
-        // line takes over until that word is committed.
+        // Typing a pinyin letter withdraws the suggestions: the candidates
+        // take over the same row until that word is committed.
         let composing = mode == .pinyin && !composition.isEmpty
         let visible = mode != .voice && !composing
         suggestionScroll.isHidden = !visible
@@ -1259,15 +1255,16 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         clearVoiceUndo()
     }
     private func lineDeleteKey() -> UIButton {
-        let button = key("", symbol: "delete.left.fill") { [weak self] in self?.deleteLine() }
+        let button = Lab.button("", symbol: "delete.left.fill") { [weak self] in self?.deleteLine() }
+        button.configuration?.contentInsets = .zero
         button.configuration?.baseForegroundColor = .systemOrange
+        button.configuration?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 15)
         button.accessibilityIdentifier = "keyboard-delete-line"
         button.accessibilityLabel = "删除整行"
         button.accessibilityHint = "短按删除光标前的一整行，长按连续删除"
         let gesture = UILongPressGestureRecognizer(target: self, action: #selector(lineDeleteHeld(_:)))
         gesture.minimumPressDuration = 0.4
         button.addGestureRecognizer(gesture)
-        button.widthAnchor.constraint(equalToConstant: 44).isActive = true
         return button
     }
     @objc private func lineDeleteHeld(_ gesture: UILongPressGestureRecognizer) { held(gesture, lines: true) }
@@ -1337,15 +1334,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func updateCandidates() {
         candidateLock.lock(); candidateGeneration += 1; let generation = candidateGeneration; candidateLock.unlock()
         let composing = mode == .pinyin && !composition.isEmpty
-        normalHeader?.isHidden = composing; pinyinHeader?.isHidden = !composing
-        updatePreferredHeight()
+        pinyinLine?.isHidden = !composing
         if !composing { setCandidatesExpanded(false) }
         compositionLabel?.text = composition
         suggestionScroll.isHidden = mode == .voice || composing
         scheduleSuggestions()
-        // A dedicated full-width line preserves the beginning of the spelling.
-        // Users can scroll this line to inspect a spelling wider than the screen.
-        compositionViewport.setContentOffset(.zero, animated: false)
         displayedComposition = ""; displayedCandidates = []
         candidateRow?.arrangedSubviews.forEach { $0.isHidden = true }
         expandCandidatesButton?.isEnabled = false

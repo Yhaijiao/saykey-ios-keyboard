@@ -83,16 +83,22 @@ final class KeyboardLayoutTests: XCTestCase {
             let offset = voiceReturn.convert(voiceReturn.bounds, to: root).midX - root.bounds.midX
             XCTAssertEqual(offset.remainder(dividingBy: pager.bounds.width), 0, accuracy: 1)
         }
-        // The line delete sits directly above the voice page's delete key.
-        let pageDeletes = views.filter { $0.accessibilityIdentifier == "keyboard-delete" }
+        // Three fixed regions: button bar, strip, pages. The hide button is
+        // the right-most control of the bar, with the page selector on its
+        // left, and the one line delete shared by all pages sits below it.
+        let hideFrame = views.first { $0.accessibilityIdentifier == "keyboard-hide" }.map { $0.convert($0.bounds, to: root) } ?? .zero
+        let selectorFrame = selector.convert(selector.bounds, to: root)
+        XCTAssertLessThanOrEqual(selectorFrame.maxX, hideFrame.minX)
+        XCTAssertEqual(hideFrame.maxX, root.bounds.width - 12, accuracy: 1)
         let lineDeletes = views.filter { $0.accessibilityIdentifier == "keyboard-delete-line" }
-        XCTAssertEqual(lineDeletes.count, 3, "Every page has a line delete")
-        if let voiceDelete = pageDeletes.first(where: { $0.bounds.width > 100 }) {
-            let deleteFrame = voiceDelete.convert(voiceDelete.bounds, to: root)
-            let above = lineDeletes.map { $0.convert($0.bounds, to: root) }.filter { $0.maxY <= deleteFrame.minY }
-            XCTAssertEqual(above.count, 1)
-            XCTAssertEqual(above.first?.maxX ?? 0, deleteFrame.maxX, accuracy: 1)
-        } else { XCTFail("Missing the voice page's delete key") }
+        XCTAssertEqual(lineDeletes.count, 1, "One line delete serves every page")
+        if let lineDelete = lineDeletes.first {
+            let frame = lineDelete.convert(lineDelete.bounds, to: root)
+            XCTAssertEqual(frame.minX, hideFrame.minX, accuracy: 1)
+            XCTAssertEqual(frame.maxX, hideFrame.maxX, accuracy: 1)
+            XCTAssertGreaterThanOrEqual(frame.minY, hideFrame.maxY)
+            XCTAssertLessThanOrEqual(frame.maxY, pager.convert(pager.bounds, to: root).minY)
+        }
         let firstTop = firstKeys[0].convert(firstKeys[0].bounds, to: root).minY
         XCTAssertGreaterThan(firstKeys[0].bounds.width, 0)
         XCTAssertEqual(firstKeys[1].convert(firstKeys[1].bounds, to: root).minY, firstTop, accuracy: 1)
@@ -183,11 +189,18 @@ final class KeyboardLayoutTests: XCTestCase {
         let label = descendants(root).first { $0.accessibilityIdentifier == "pinyin-composition" } as! UILabel
         XCTAssertEqual(label.text, spelling, "Rapid typing must not drop letters")
         host.view.layoutIfNeeded(); root.layoutIfNeeded()
-        let viewport = descendants(root).first { $0.accessibilityIdentifier == "pinyin-composition-scroll" } as! UIScrollView
+        // The spelling shares the second row with its candidates; the button
+        // bar above it stays exactly as it is on the English page.
         let candidateLine = descendants(root).first { $0.accessibilityIdentifier == "pinyin-candidate-line" }!
-        XCTAssertEqual(viewport.bounds.width, root.bounds.width - 24, accuracy: 1)
-        XCTAssertEqual(viewport.contentOffset.x, 0, accuracy: 1)
-        XCTAssertLessThanOrEqual(viewport.convert(viewport.bounds, to: root).maxY, candidateLine.convert(candidateLine.bounds, to: root).minY + 1)
+        let candidateArea = descendants(root).first { $0.accessibilityIdentifier == "pinyin-candidates" }!
+        XCTAssertFalse(candidateLine.isHidden)
+        XCTAssertGreaterThan(label.bounds.width, 20)
+        XCTAssertLessThanOrEqual(label.bounds.width, candidateLine.bounds.width * 0.34 + 1)
+        XCTAssertLessThanOrEqual(label.convert(label.bounds, to: root).maxX, candidateArea.convert(candidateArea.bounds, to: root).minX)
+        XCTAssertGreaterThan(candidateArea.bounds.width, 100)
+        let barBottom = visibleButton("keyboard-hide", in: root).convert(CGRect(x: 0, y: 0, width: 1, height: 30), to: root).maxY
+        XCTAssertTrue(isVisible("keyboard-mode-selector", in: root), "The button bar stays while pinyin is typed")
+        XCTAssertGreaterThanOrEqual(candidateLine.convert(candidateLine.bounds, to: root).minY, barBottom - 1)
         for _ in spelling { visibleButton("keyboard-delete", in: root).sendActions(for: .primaryActionTriggered) }
         for letter in "nihao" { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
         await waitForCandidate("candidate-你好", in: root)
