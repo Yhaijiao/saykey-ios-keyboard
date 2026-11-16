@@ -8,6 +8,12 @@ struct VoiceResultDelivery {
     mutating func begin(_ id: String, documentID: UUID) {
         expectedID = id; self.documentID = documentID; pending = nil
     }
+    /// The keyboard was hidden and shown again while the job was running:
+    /// the result now belongs to the field it reappeared in.
+    mutating func rebind(documentID: UUID) {
+        guard expectedID != nil, pending == nil else { return }
+        self.documentID = documentID
+    }
     mutating func receive(id: String, text: String) {
         guard id == expectedID, !text.isEmpty else { return }
         pending = (id, text)

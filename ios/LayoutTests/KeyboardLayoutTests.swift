@@ -44,8 +44,10 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertEqual(pager.contentSize.width, pager.bounds.width * 3, accuracy: 1)
         XCTAssertEqual(pager.contentOffset.x, pager.bounds.width, accuracy: 1, "The current page is always the center one")
         let selector = views.first { $0.accessibilityIdentifier == "keyboard-mode-selector" } as! UISegmentedControl
-        XCTAssertEqual(selector.titleForSegment(at: selector.selectedSegmentIndex), "EN", "The keyboard opens on English")
-        for identifier in ["keyboard-header-mic", "keyboard-hide", "keyboard-mode-selector"] {
+        XCTAssertEqual(selector.numberOfSegments, 2, "Letters and voice")
+        XCTAssertEqual(selector.selectedSegmentIndex, 0, "The keyboard opens on the letter page")
+        XCTAssertEqual(visibleButton("keyboard-space", in: root).configuration?.title, "拼", "The letter page opens in pinyin")
+        for identifier in ["keyboard-header-mic", "keyboard-header-newline", "keyboard-hide", "keyboard-mode-selector"] {
             let control = views.first { $0.accessibilityIdentifier == identifier }!
             let frame = control.convert(control.bounds, to: root)
             XCTAssertFalse(control.isHidden, identifier)
@@ -74,11 +76,22 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(hotFrame.maxY, pager.bounds.height)
         let firstKeys = views.filter { $0.accessibilityIdentifier == "key-q" }
         let returns = views.filter { $0.accessibilityIdentifier == "keyboard-return" }
-        XCTAssertEqual(firstKeys.count, 2, "English and pinyin pages must both be constructed")
-        XCTAssertEqual(returns.count, 3, "Voice and both text pages must be constructed")
-        guard firstKeys.count == 2, returns.count == 3 else { return }
+        XCTAssertEqual(firstKeys.count, 1, "One letter page serves pinyin and English")
+        XCTAssertEqual(returns.count, 3, "The letter page and the voice page on either side must be constructed")
+        guard firstKeys.count == 1, returns.count == 3 else { return }
         let voiceReturns = returns.filter { $0.bounds.width > 100 }
-        XCTAssertEqual(voiceReturns.count, 1)
+        XCTAssertEqual(voiceReturns.count, 2)
+        // The auto-newline switch sits between the microphone and the selector.
+        let headerMicFrame = views.first { $0.accessibilityIdentifier == "keyboard-header-mic" }.map { $0.convert($0.bounds, to: root) } ?? .zero
+        let headerNewlineFrame = views.first { $0.accessibilityIdentifier == "keyboard-header-newline" }.map { $0.convert($0.bounds, to: root) } ?? .zero
+        XCTAssertLessThanOrEqual(headerMicFrame.maxX, headerNewlineFrame.minX)
+        XCTAssertLessThanOrEqual(headerNewlineFrame.maxX, selector.convert(selector.bounds, to: root).minX)
+        // The language key is next to "123" at the bottom left.
+        let numberFrame = visibleButton("keyboard-number-toggle", in: root).convert(visibleButton("keyboard-number-toggle", in: root).bounds, to: root)
+        let languageFrame = visibleButton("keyboard-language", in: root).convert(visibleButton("keyboard-language", in: root).bounds, to: root)
+        XCTAssertEqual(numberFrame.minX, 12, accuracy: 1)
+        XCTAssertEqual(languageFrame.minX, numberFrame.maxX + 5, accuracy: 1)
+        XCTAssertEqual(languageFrame.midY, numberFrame.midY, accuracy: 1)
         if let voiceReturn = voiceReturns.first {
             let offset = voiceReturn.convert(voiceReturn.bounds, to: root).midX - root.bounds.midX
             XCTAssertEqual(offset.remainder(dividingBy: pager.bounds.width), 0, accuracy: 1)
@@ -101,7 +114,7 @@ final class KeyboardLayoutTests: XCTestCase {
         }
         let firstTop = firstKeys[0].convert(firstKeys[0].bounds, to: root).minY
         XCTAssertGreaterThan(firstKeys[0].bounds.width, 0)
-        XCTAssertEqual(firstKeys[1].convert(firstKeys[1].bounds, to: root).minY, firstTop, accuracy: 1)
+        XCTAssertGreaterThan(firstTop, 0)
         let bottom = returns[0].convert(returns[0].bounds, to: root).maxY
         for key in returns {
             XCTAssertEqual(key.bounds.height, 44, accuracy: 1)
@@ -123,6 +136,12 @@ final class KeyboardLayoutTests: XCTestCase {
             visibleButton("keyboard-shift", in: root).sendActions(for: .primaryActionTriggered)
         }
         XCTAssertNotNil(visibleButton("key-q", in: root), "Shift always returns to lowercase")
+        // 中/英 switches the same page between pinyin and English and back.
+        visibleButton("keyboard-language", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(visibleButton("keyboard-space", in: root).configuration?.title, "EN")
+        XCTAssertEqual(selector.selectedSegmentIndex, 0, "Changing language stays on the letter page")
+        visibleButton("keyboard-language", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(visibleButton("keyboard-space", in: root).configuration?.title, "拼")
     }
 
     @MainActor func testHotwordEditorUsesOwnTextAndUnicodeDelete() async {

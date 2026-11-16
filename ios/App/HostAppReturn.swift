@@ -13,7 +13,8 @@ import UIKit
 final class HostAppReturn: NSObject {
     static let shared = HostAppReturn()
     private var observed: NSObject?
-    private var lastHost: (bundleID: String, at: Date)?
+    private var lastHost: (id: String, at: Date)?
+    private var backgroundedAt: Date?
 
     /// Bundle ID → URL that opens the app's main screen.
     static let schemes: [String: String] = [
@@ -59,6 +60,10 @@ final class HostAppReturn: NSObject {
               let keyboards = typeObject.perform(shared)?.takeUnretainedValue() as? NSObject,
               keyboards.responds(to: NSSelectorFromString("currentState")) else { return }
         observed = keyboards
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.backgroundedAt = Date()
+        }
         keyboards.addObserver(self, forKeyPath: "currentState", options: [.new, .initial], context: nil)
     }
 
@@ -66,7 +71,8 @@ final class HostAppReturn: NSObject {
                                change: [NSKeyValueChangeKey: Any]?, context: UnsafeMutableRawPointer?) {
         guard keyPath == "currentState", let state = change?[.newKey] as? NSObject,
               let id = Self.source(of: state) else { return }
-        DispatchQueue.main.async { self.lastHost = (id, Date()) }
+        let at = Date()
+        DispatchQueue.main.async { self.lastHost = (id, at) }
     }
 
     private static func source(of state: NSObject?) -> String? {
@@ -76,17 +82,17 @@ final class HostAppReturn: NSObject {
         return id
     }
 
-    /// The host to return to: the keyboard's report, else the system's
-    /// current keyboard state, else the last host seen. The last one may be
-    /// older than this launch's tap when Lab was suspended in the background,
-    /// so it is trusted only for a few minutes.
-    func host(reported: String?) -> String? {
-        if let reported, !Self.isOwn(reported) { return reported }
-        if let current = Self.source(of: observed?.value(forKey: "currentState") as? NSObject) {
-            lastHost = (current, Date()); return current
-        }
-        guard let last = lastHost, Date().timeIntervalSince(last.at) < 300 else { return nil }
-        return last.bundleID
+    /// The host to return to for a request that reached Lab at
+    /// `requestedAt`, or nil while it is not (yet) known. Lab may still hold
+    /// the host of an earlier visit when it wakes up, so the choice is left
+    /// to `HostReturnPolicy`; call again until it answers or time runs out.
+    func host(reported: String?, requestedAt: Date) -> String? {
+        let reported = reported.flatMap { Self.isOwn($0) ? nil : $0 }
+        let current = Self.source(of: observed?.value(forKey: "currentState") as? NSObject)
+        let decision = HostReturnPolicy.decide(reported: reported, current: current, observed: lastHost,
+                                               requestedAt: requestedAt, backgroundedAt: backgroundedAt, now: Date())
+        guard case .open(let id) = decision else { return nil }
+        return id
     }
 
     /// A readable name for the status line.
