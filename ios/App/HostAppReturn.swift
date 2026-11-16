@@ -95,6 +95,28 @@ final class HostAppReturn: NSObject {
         return id
     }
 
+    /// Triggers the system's own "◀ back to the previous app" action, the
+    /// one behind the breadcrumb in the status bar. It needs no bundle ID
+    /// and always targets the app the user really came from. Undocumented,
+    /// so every step is checked at runtime; false means it was not sent
+    /// and the caller should use another route.
+    func goBackViaSystem() -> Bool {
+        let getter = NSSelectorFromString("_systemNavigationAction")
+        let send = NSSelectorFromString("sendResponseForDestination:")
+        let canSend = NSSelectorFromString("canSendResponse")
+        let owners: [NSObject] = [UIApplication.shared] + UIApplication.shared.connectedScenes.map { $0 as NSObject }
+        for owner in owners where owner.responds(to: getter) {
+            guard let action = owner.perform(getter)?.takeUnretainedValue() as? NSObject,
+                  action.responds(to: send), let method = action.method(for: send) else { continue }
+            if action.responds(to: canSend), (action.value(forKey: "canSendResponse") as? Bool) == false { continue }
+            typealias Send = @convention(c) (AnyObject, Selector, UInt) -> Void
+            // Destination 0 is the app that opened this one.
+            unsafeBitCast(method, to: Send.self)(action, send, 0)
+            return true
+        }
+        return false
+    }
+
     /// A readable name for the status line.
     static func displayName(_ bundleID: String) -> String {
         let names = ["com.tencent.xin": "微信", "com.apple.mobilenotes": "备忘录",
