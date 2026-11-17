@@ -72,7 +72,7 @@ jobs:
           mkdir -p build
           swiftc -parse-as-library ios/Shared/PinyinEngine.swift ios/Shared/VoiceResultDelivery.swift scripts/PinyinSmoke.swift -o build/pinyin-smoke
           build/pinyin-smoke ios/Shared/pinyin-lexicon.json
-          swiftc -parse-as-library ios/Shared/WordSuggestions.swift scripts/SuggestSmoke.swift -o build/suggest-smoke
+          swiftc -parse-as-library ios/Shared/WordSuggestions.swift ios/Shared/UserLexicon.swift ios/Shared/PinyinEngine.swift scripts/SuggestSmoke.swift -o build/suggest-smoke
           build/suggest-smoke ios/Shared
           swiftc -parse-as-library ios/Shared/BridgeEndpoint.swift scripts/EndpointSmoke.swift -o build/endpoint-smoke
           build/endpoint-smoke
@@ -105,11 +105,11 @@ jobs:
           done
           codesign --verify --deep --strict "$APP"
           cd artifacts
-          zip -qr CapsWriterLab-0.4.24-sideload.ipa Payload
-          shasum -a 256 CapsWriterLab-0.4.24-sideload.ipa > SHA256SUMS.txt
+          zip -qr CapsWriterLab-0.4.25-sideload.ipa Payload
+          shasum -a 256 CapsWriterLab-0.4.25-sideload.ipa > SHA256SUMS.txt
           rm -r Payload
       - name: Verify package
-        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.4.24-sideload.ipa 0.4.24
+        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.4.25-sideload.ipa 0.4.25
       - name: Upload install package before simulator tests
         uses: actions/upload-artifact@v4
         with:

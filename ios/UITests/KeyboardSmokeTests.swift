@@ -44,7 +44,7 @@ final class KeyboardSmokeTests: XCTestCase {
         }
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 20), app.debugDescription)
         dismissSystemTypingIntroduction(in: app, wait: true)
-        // The keyboard opens on its English page; the hide button in the top
+        // The keyboard opens on its letter page; the hide button in the top
         // bar tells it apart from the system keyboard.
         let testButton = app.buttons["keyboard-voice-button"]
         let marker = app.buttons["keyboard-hide"]
@@ -66,7 +66,10 @@ final class KeyboardSmokeTests: XCTestCase {
             }
         }
         XCTAssertTrue(marker.waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertTrue(app.buttons["key-h"].waitForExistence(timeout: 5), "English is the first page")
+        XCTAssertTrue(app.buttons["key-h"].waitForExistence(timeout: 5), "Letters are the first page")
+        XCTAssertTrue(app.buttons["keyboard-header-newline"].exists, "Auto newline is in the bar on the letter page")
+        // The page opens in pinyin; the key beside 123 switches to English.
+        switchLanguage(to: "英文", in: app)
         XCTAssertTrue(app.buttons["keyboard-header-mic"].exists, "Letter pages can start voice input")
         let pageBounds = app.scrollViews["keyboard-pages"].frame
         XCTAssertLessThanOrEqual(pageBounds.height, 216, "Normal compact body must not retain the extra footer row")
@@ -101,8 +104,11 @@ final class KeyboardSmokeTests: XCTestCase {
         XCTAssertLessThanOrEqual(testButton.frame.maxY, pageBounds.maxY)
         XCTAssertEqual(app.buttons["keyboard-return"].frame.maxY, voiceReturnBottom, accuracy: 1)
 
+        // With two pages, the next swipe is back on the letters.
         app.scrollViews["keyboard-pages"].swipeLeft()
-        waitForMode("拼", in: selector)
+        waitForMode(0, in: selector)
+        XCTAssertTrue(app.buttons["key-q"].waitForExistence(timeout: 5))
+        switchLanguage(to: "中文拼音", in: app)
         XCTAssertEqual(app.buttons["key-q"].frame.minY, englishTop, accuracy: 1)
         XCTAssertEqual(app.buttons["keyboard-return"].frame.maxY, voiceReturnBottom, accuracy: 1)
         attach(app, name: "Aligned idle Chinese keyboard")
@@ -149,17 +155,15 @@ final class KeyboardSmokeTests: XCTestCase {
         app.buttons["keyboard-return"].tap()
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("我们现在ok"))
         attach(app, name: "Chinese pinyin keyboard")
-        app.scrollViews["keyboard-pages"].swipeLeft()
-        waitForMode("EN", in: selector)
         app.scrollViews["keyboard-pages"].swipeRight()
-        waitForMode("拼", in: selector)
-        app.scrollViews["keyboard-pages"].swipeRight()
+        waitForMode(1, in: selector)
         XCTAssertTrue(testButton.waitForExistence(timeout: 5))
         attach(app, name: "Voice test keyboard")
         // Direct mode selection uses the same sliding transition.
-        selector.buttons["EN"].tap()
-        waitForMode("EN", in: selector)
+        selector.buttons.element(boundBy: 0).tap()
+        waitForMode(0, in: selector)
         XCTAssertTrue(app.buttons["key-h"].waitForExistence(timeout: 5))
+        switchLanguage(to: "英文", in: app)
         for _ in 0..<30 { app.buttons["key-a"].tap() }
         let before = (editor.value as? String ?? "").count
         app.buttons["keyboard-delete"].tap()
@@ -181,9 +185,17 @@ final class KeyboardSmokeTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 10), .completed)
     }
 
-    private func waitForMode(_ name: String, in selector: XCUIElement) {
-        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: selector.buttons[name])
+    private func waitForMode(_ index: Int, in selector: XCUIElement) {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"),
+                                                    object: selector.buttons.element(boundBy: index))
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed)
+    }
+    /// Taps 中/英 and waits for the rebuilt page to report the language.
+    private func switchLanguage(to label: String, in app: XCUIApplication) {
+        app.buttons["keyboard-language"].tap()
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", label),
+                                                    object: app.buttons["keyboard-language"])
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 15), .completed)
     }
 
     private func attach(_ app: XCUIApplication, name: String) {

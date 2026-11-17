@@ -6,9 +6,13 @@ private final class KeyboardPagingScrollView: UIScrollView {
 }
 
 final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate {
-    /// Page order, left to right. English is the page the keyboard opens on.
-    private enum Mode: Int { case english, voice, pinyin }
-    private var mode: Mode = .english
+    /// The two pages: the letter keyboard the panel opens on, and voice.
+    private enum Mode: Int { case letters, voice }
+    private var mode: Mode = .letters
+    /// Language of the letter page, switched by the 中/英 key beside "123".
+    /// The keyboard opens in pinyin.
+    private var chinese = true
+    private var isPinyin: Bool { mode == .letters && chinese }
     private var shiftState = ShiftState.off
     private var lastShiftTap = Date.distantPast
     private var symbols = false
@@ -101,6 +105,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var voiceUndo = VoiceUndoRecord()
     private weak var undoButton: UIButton?
     private weak var newlineButton: UIButton?
+    private weak var headerNewline: UIButton?
     private var resumeRequest: UUID?
     private var appeared = false
     private var deleteTimer: Timer?
@@ -115,6 +120,13 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var suggestionRefreshPending = false
     /// The last insert was a tapped suggestion that added its own space.
     private var suggestionSpace = false
+    /// This user's own word counts; see `UserLexicon`.
+    private var lexicon = UserLexicon.load()
+    private var lexiconSavePending = false
+    /// The candidates picked so far for the pinyin being typed, and the text
+    /// that was before the cursor when the first one was picked.
+    private var phraseParts: [(letters: String, text: String)] = []
+    private var phraseBefore = ""
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
@@ -128,8 +140,14 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         // a result that finishes meanwhile is inserted on return as usual.
         clearInlineDraft()
         voiceTimer?.invalidate(); voiceTimer = nil
-        if voiceID == nil { voiceRevision = UUID(); voiceBusy = false }
-        if ["pending", "recording"].contains(voiceState) { cancelVoice() }
+        // A recording that has started keeps running while the panel is
+        // hidden; the phone app does the recording, not the keyboard. It is
+        // picked up again in viewDidAppear and ends when the user taps stop.
+        if voiceID == nil {
+            voiceRevision = UUID(); voiceBusy = false
+            if voiceState != "idle" { resetVoice("录音已取消 · 点击重新开始") }
+        }
+        saveLexiconNow()
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -138,9 +156,15 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         if hasFullAccess { BridgePairingStore.markKeyboardReady() }
         refreshBridgePairing()
         updatePreferredHeight()
+        restoreActiveVoiceJob()
+        // Hiding and reopening the panel may give the same field a new
+        // identifier. The user came back to finish this recording here.
+        if voiceID != nil && ["pending", "recording", "stopping", "processing"].contains(voiceState) {
+            voiceDelivery.rebind(documentID: textDocumentProxy.documentIdentifier)
+        }
         insertVoiceResultIfReady()
         scheduleSuggestions()
-        if voiceID != nil && ["stopping", "processing"].contains(voiceState) { scheduleVoicePoll() }
+        if voiceID != nil && ["pending", "recording", "stopping", "processing"].contains(voiceState) { scheduleVoicePoll() }
         updateVoice(); startVoiceReadiness()
         resumeAfterRenewalIfNeeded()
     }
@@ -212,7 +236,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             modeSelector?.selectedSegmentIndex = mode.rawValue; return
         }
         stopDeleting()
-        animatePage((next.rawValue - mode.rawValue + 3) % 3 == 1 ? 2 : 0)
+        animatePage(next == .voice ? 2 : 0)
     }
     private func animatePage(_ index: Int) {
         guard pageWidth > 0 else { return }
@@ -237,8 +261,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         changingPage = false
         let index = max(0, min(2, Int((pager.contentOffset.x / pageWidth).rounded())))
         guard index != 1 else { modeSelector?.selectedSegmentIndex = mode.rawValue; return }
-        let next = pageMode(offset: index == 2 ? 1 : 2)
-        if mode == .pinyin && next != .pinyin { commitComposition() }
+        let next = pageMode(offset: 1)
+        guard next != mode else { layoutPages(center: true); return }
+        if isPinyin { commitComposition() }
         // A recording keeps running across pages: it can be started and
         // stopped from the header microphone on the letter pages too.
         mode = next; shiftState = .off; symbols = false; extraSymbols = false; render()
@@ -267,12 +292,13 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         if equal { result.distribution = .fillEqually }
         return result
     }
-    /// The page `offset` steps to the right. While the hotword editor is open
-    /// there is no voice page, so swiping just flips between EN and 拼.
+    /// The page `offset` steps away. With two pages the neighbour on either
+    /// side is the other one. While the hotword editor is open there is no
+    /// voice page at all.
     private func pageMode(offset: Int) -> Mode {
-        let next = Mode(rawValue: (mode.rawValue + offset) % 3) ?? .voice
-        guard hotEditor != nil, next == .voice else { return next }
-        return mode == .pinyin ? .english : .pinyin
+        if hotEditor != nil { return .letters }
+        if offset % 2 == 0 { return mode }
+        return mode == .letters ? .voice : .letters
     }
     private func render() {
         stopDeleting()
@@ -281,12 +307,13 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         if content.arrangedSubviews.isEmpty { buildChrome() }
         centeringPages = true
         for item in pageStrip.arrangedSubviews { pageStrip.removeArrangedSubview(item); item.removeFromSuperview() }
-        for (index, delta) in [2, 0, 1].enumerated() {
+        pager.isScrollEnabled = !candidatesExpanded && hotEditor == nil
+        for (index, delta) in [1, 0, 1].enumerated() {
             let pageMode = self.pageMode(offset: delta)
             let page = UIStackView(); page.axis = .vertical; page.spacing = 8
             page.isUserInteractionEnabled = index == 1; page.accessibilityElementsHidden = index != 1
             page.addArrangedSubview(UIView())
-            if pageMode == .voice { renderVoice(content: page) } else { renderLetters(mode: pageMode, content: page) }
+            if pageMode == .voice { renderVoice(content: page) } else { renderLetters(content: page) }
             pageStrip.addArrangedSubview(page)
         }
         modeSelector?.selectedSegmentIndex = mode.rawValue
@@ -300,8 +327,12 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         brand.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         brand.accessibilityIdentifier = "keyboard-brand"
         brandLabel = brand
-        let selector = UISegmentedControl(items: ["EN", "", "拼"])
-        selector.setImage(UIImage(systemName: "waveform"), forSegmentAt: Mode.voice.rawValue)
+        // Two pages: letters (pinyin or English) and voice.
+        let selector = UISegmentedControl(items: ["", ""])
+        for (index, page) in [("keyboard", "键盘"), ("waveform", "语音")].enumerated() {
+            let image = UIImage(systemName: page.0); image?.accessibilityLabel = page.1
+            selector.setImage(image, forSegmentAt: index)
+        }
         selector.backgroundColor = UIColor(white: 0.13, alpha: 1)
         selector.selectedSegmentTintColor = UIColor(white: 0.28, alpha: 1)
         selector.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .normal)
@@ -312,7 +343,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         selector.addAction(UIAction { [weak self, weak selector] _ in
             self?.changeMode(Mode(rawValue: selector?.selectedSegmentIndex ?? 0) ?? .voice)
         }, for: .valueChanged)
-        selector.widthAnchor.constraint(equalToConstant: 126).isActive = true
+        selector.widthAnchor.constraint(equalToConstant: 88).isActive = true
         // Small and only shown when there is something to undo, so it never
         // looks like the auto-newline key on the voice page.
         var undoConfig = UIButton.Configuration.tinted()
@@ -338,6 +369,16 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         mic.heightAnchor.constraint(equalToConstant: 30).isActive = true
         mic.accessibilityIdentifier = "keyboard-header-mic"
         headerMic = mic
+        // The auto-newline switch for voice results, between the microphone
+        // and the page selector. The voice page has its own, so like the
+        // microphone this one is hidden there.
+        let newline = Lab.button("", symbol: "arrow.turn.down.left") { [weak self] in self?.toggleAutoNewline() }
+        newline.configuration?.contentInsets = .zero
+        newline.configuration?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        newline.widthAnchor.constraint(equalToConstant: 38).isActive = true
+        newline.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        newline.accessibilityIdentifier = "keyboard-header-newline"
+        headerNewline = newline
         // Takes the whole SayKey panel off the screen so the text behind it
         // can be read. Tapping the text field brings it back.
         let hide = Lab.button("", symbol: "keyboard.chevron.compact.down") { [weak self] in self?.hidePanel() }
@@ -352,7 +393,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         headerSpace.setContentHuggingPriority(UILayoutPriority(1), for: .horizontal)
         // The hide button is the right-most control; the page selector sits
         // to its left. This row never changes, whatever is being typed.
-        let header = row([brand, undo, headerSpace, mic, selector, hide], equal: false); header.alignment = .center
+        let header = row([brand, undo, headerSpace, mic, newline, selector, hide], equal: false); header.alignment = .center
         let headerHeight = header.heightAnchor.constraint(equalToConstant: 32)
         headerHeight.priority = .defaultHigh; headerHeight.isActive = true
         content.addArrangedSubview(header)
@@ -693,11 +734,36 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             self.voiceBusy = false
             if case .success(let reply) = result {
                 self.voiceID = reply.id
-                if let id = reply.id { self.voiceDelivery.begin(id, documentID: documentID) }
-                self.voiceStarted = Date(); self.scheduleVoicePoll()
+                self.voiceStarted = Date()
+                if let id = reply.id {
+                    self.voiceDelivery.begin(id, documentID: documentID)
+                    UserDefaults.standard.set(["id": id, "document": documentID.uuidString,
+                                               "started": self.voiceStarted.timeIntervalSince1970],
+                                              forKey: Self.activeJobKey)
+                }
+                self.scheduleVoicePoll()
             }
             self.handleVoice(result)
         }
+    }
+    private static let activeJobKey = "voice.activeJob"
+    /// iOS may build a new keyboard when the panel is brought back after
+    /// being hidden. A recording started by the previous one is still
+    /// running in the phone app: take it over so stop and the result work.
+    private func restoreActiveVoiceJob() {
+        guard voiceID == nil, voiceState == "idle", !voiceBusy, hasFullAccess,
+              let saved = UserDefaults.standard.dictionary(forKey: Self.activeJobKey),
+              let id = saved["id"] as? String, let started = saved["started"] as? Double else { return }
+        let begun = Date(timeIntervalSince1970: started)
+        guard Date().timeIntervalSince(begun) < Double(Lab.maxRecordingSeconds + 200),
+              let pairing = bridgePairing else {
+            UserDefaults.standard.removeObject(forKey: Self.activeJobKey); return
+        }
+        let document = (saved["document"] as? String).flatMap(UUID.init(uuidString:))
+        voicePairing = pairing; voiceID = id; voiceStarted = begun
+        voiceDelivery.begin(id, documentID: document ?? textDocumentProxy.documentIdentifier)
+        // The next poll corrects this if the recording already ended.
+        voiceState = "recording"; voiceMessage = "正在录音 · 说完点击停止（最长 5 分钟）"
     }
     /// Session status is tracked on every page, so the header microphone
     /// knows whether it can record at once or must renew the session in Lab.
@@ -917,11 +983,12 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let idle = voiceID == nil && voiceState == "idle"
         undoButton?.isHidden = !(idle && voiceUndo.isAvailable)
         updateHeader()
-        guard let newline = newlineButton else { return }
         let on = autoNewline != .off
-        newline.configuration?.baseBackgroundColor = autoNewline == .hard ? UIColor.systemOrange : (on ? UIColor.systemBlue : Lab.surface)
-        newline.configuration?.baseForegroundColor = on ? .white : Lab.muted
-        newline.accessibilityLabel = autoNewline.hint
+        for newline in [newlineButton, headerNewline].compactMap({ $0 }) {
+            newline.configuration?.baseBackgroundColor = autoNewline == .hard ? UIColor.systemOrange : (on ? UIColor.systemBlue : Lab.surface)
+            newline.configuration?.baseForegroundColor = on ? .white : Lab.muted
+            newline.accessibilityLabel = autoNewline.hint
+        }
     }
     /// Header state shared by all pages: the microphone mirrors the voice
     /// page's button, and on the letter pages the brand slot doubles as the
@@ -950,6 +1017,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         guard let mic = headerMic else { return }
         let recording = voiceState == "recording"
         mic.isHidden = mode == .voice || hotEditor != nil
+        headerNewline?.isHidden = mic.isHidden
         mic.configuration?.image = UIImage(systemName: recording ? "stop.fill" : "mic.fill")
         mic.configuration?.baseBackgroundColor = recording ? UIColor.systemRed : UIColor(white: 0.94, alpha: 1)
         mic.configuration?.baseForegroundColor = recording ? UIColor.white : UIColor.black
@@ -1007,6 +1075,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func resetVoice(_ message: String) {
         voiceTimer?.invalidate(); voiceTimer = nil
+        UserDefaults.standard.removeObject(forKey: Self.activeJobKey)
         voiceID = nil; voicePairing = nil; voiceDelivery.reset(); voiceState = "idle"; voiceBusy = false
         voiceDraft = ""; clearInlineDraft()
         voiceRevision = UUID(); voicePolling = false; voiceFailureSince = nil
@@ -1017,8 +1086,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         if let id = voiceID { voiceCall("/v1/voice/cancel", value: ["id": id]) { _ in } }
         resetVoice("录音已取消 · 点击重新开始")
     }
-    private func renderLetters(mode: Mode, content: UIStackView) {
-        let punctuation = mode == .pinyin ? "。，？！、" : ".,?!'"
+    private func renderLetters(content: UIStackView) {
+        let punctuation = chinese ? "。，？！、" : ".,?!'"
         let layouts = symbols ? (extraSymbols ? ["[]{}#%^*+=", "_\\|~<>€£¥•", punctuation] : ["1234567890", "-/:;()$&@\"", punctuation]) : ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
         var letterWidth: NSLayoutDimension?
         var sizingConstraints: [NSLayoutConstraint] = []
@@ -1026,13 +1095,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             var buttons: [UIView] = []
             var shiftButton: UIButton?
             if index == 2 && !symbols {
-                let shift = key("", symbol: mode == .pinyin ? "shift" : shiftState.symbolName) { [weak self] in
-                    guard let self = self else { return }
-                    if self.mode == .pinyin { self.changeMode(.english) } else { self.tapShift() }
-                }
+                // In pinyin too: a capital letter is typed as it is, not as pinyin.
+                let shift = key("", symbol: shiftState.symbolName) { [weak self] in self?.tapShift() }
                 shift.accessibilityIdentifier = "keyboard-shift"
-                shift.accessibilityLabel = mode == .pinyin ? "切换到英文" : "大小写切换"
-                shift.accessibilityHint = mode == .pinyin ? nil : "点一下大写一个字母，快速点两下锁定大写"
+                shift.accessibilityLabel = "大小写切换"
+                shift.accessibilityHint = "点一下大写一个字母，快速点两下锁定大写"
                 shiftButton = shift
                 buttons.append(shift)
             }
@@ -1045,7 +1112,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                 buttons.append(more)
             }
             for letter in line {
-                let title = !symbols && mode == .english && shiftState.isOn ? String(letter).uppercased() : String(letter)
+                let title = !symbols && shiftState.isOn ? String(letter).uppercased() : String(letter)
                 let button = key(title) { [weak self] in self?.input(title) }
                 if index == 0 && letterWidth == nil { letterWidth = button.widthAnchor }
                 if !symbols && index > 0, let width = letterWidth { sizingConstraints.append(button.widthAnchor.constraint(equalTo: width)) }
@@ -1069,8 +1136,24 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             guard let self = self else { return }; self.commitComposition(); self.symbols.toggle(); self.extraSymbols = false; self.render()
         }
         number.accessibilityIdentifier = "keyboard-number-toggle"
-        number.widthAnchor.constraint(equalToConstant: 74).isActive = true
-        let space = key(mode == .pinyin ? "拼" : "EN") { [weak self] in self?.space() }
+        number.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        // One letter page for both languages: this key switches between
+        // pinyin and English, and shows the active one in white.
+        let language = key("") { [weak self] in self?.toggleLanguage() }
+        var languageTitle = AttributedString("中"), slash = AttributedString("/"), other = AttributedString("英")
+        languageTitle.foregroundColor = chinese ? UIColor.white : Lab.muted
+        slash.foregroundColor = Lab.muted
+        other.foregroundColor = chinese ? Lab.muted : UIColor.white
+        languageTitle.append(slash); languageTitle.append(other)
+        language.configuration?.attributedTitle = languageTitle
+        language.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
+            var output = input; output.font = UIFont.systemFont(ofSize: 15, weight: .medium); return output
+        }
+        language.accessibilityIdentifier = "keyboard-language"
+        language.accessibilityLabel = chinese ? "中文拼音" : "英文"
+        language.accessibilityHint = chinese ? "点按切换到英文" : "点按切换到中文拼音"
+        language.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        let space = key(chinese ? "拼" : "EN") { [weak self] in self?.space() }
         space.accessibilityLabel = "空格 / 选字"
         space.accessibilityIdentifier = "keyboard-space"
         space.contentHorizontalAlignment = .trailing
@@ -1081,7 +1164,13 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         enter.configuration?.title = ""; enter.configuration?.image = UIImage(systemName: "return")
         enter.configuration?.baseBackgroundColor = UIColor(white: 0.94, alpha: 1)
         enter.configuration?.baseForegroundColor = .black
-        content.addArrangedSubview(keyRow([number, space, enter], equal: false))
+        content.addArrangedSubview(keyRow([number, language, space, enter], equal: false))
+    }
+    private func toggleLanguage() {
+        guard !hotSaving else { return }
+        commitComposition()
+        chinese.toggle(); shiftState = .off
+        render()
     }
     private func returnKey() -> UIButton {
         let button = key("return") { [weak self] in
@@ -1102,11 +1191,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             deleteCharacter()
         }
         suggestionSpace = false
-        if mode == .pinyin && !symbols && text.count == 1 && text.allSatisfy({ $0 >= "a" && $0 <= "z" }) {
+        if isPinyin && !symbols && text.count == 1 && text.allSatisfy({ $0 >= "a" && $0 <= "z" }) {
             guard composition.count < 64 else { return }; composition += text; updateCandidates()
         } else {
             commitComposition(); insertText(text)
-            if mode == .english && !symbols && shiftState == .once {
+            if mode == .letters && !symbols && shiftState == .once {
                 shiftState = shiftState.afterCharacter; render()
             }
         }
@@ -1116,7 +1205,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         suggestionSpace = false
         if composition.isEmpty {
             if spaceCommittedComposition && Date().timeIntervalSince(lastSpaceAt) < 0.4 {
-                insertText(mode == .pinyin ? "。" : ". ")
+                insertText(isPinyin ? "。" : ". ")
                 lastSpaceAt = .distantPast; spaceCommittedComposition = false; return
             }
             spaceCommittedComposition = false
@@ -1124,9 +1213,13 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             let preceding = context.dropLast().last
             if Date().timeIntervalSince(lastSpaceAt) < 0.4, context.hasSuffix(" "),
                let preceding = preceding, preceding.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) {
-                deleteCharacter(); insertText(mode == .pinyin ? "。" : ". ")
+                deleteCharacter(); insertText(isPinyin ? "。" : ". ")
                 lastSpaceAt = .distantPast
-            } else { insertText(" "); lastSpaceAt = Date() }
+            } else {
+                // A space after letters finishes an English word.
+                if mode == .letters && !chinese && !symbols { learn { $0.learnEnglish(endOf: context) } }
+                insertText(" "); lastSpaceAt = Date()
+            }
         } else { commitComposition(); lastSpaceAt = Date(); spaceCommittedComposition = true }
     }
     /// The text before the cursor, in the hotword editor or the host's field.
@@ -1150,13 +1243,13 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func refreshSuggestions() {
         // Typing a pinyin letter withdraws the suggestions: the candidates
         // take over the same row until that word is committed.
-        let composing = mode == .pinyin && !composition.isEmpty
+        let composing = isPinyin && !composition.isEmpty
         let visible = mode != .voice && !composing
         suggestionScroll.isHidden = !visible
         guard visible, voiceID == nil else { showSuggestions([]); return }
         guard let suggester = suggester else { loadSuggester(); showSuggestions([]); return }
         showSuggestions(suggester.suggestions(before: editingContext(),
-                                              language: mode == .pinyin ? .chinese : .english))
+                                              language: chinese ? .chinese : .english, user: lexicon))
     }
     private func loadSuggester() {
         guard !suggesterLoading else { return }
@@ -1190,14 +1283,58 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         // Replacing a half-typed word deletes text, so make sure the field
         // still ends with what the suggestion was made for.
         if suggestion.replacing > 0 {
-            let current = suggester?.suggestions(before: editingContext(), language: .english) ?? []
+            let current = suggester?.suggestions(before: editingContext(), language: .english, user: lexicon) ?? []
             guard current.contains(suggestion) else { scheduleSuggestions(); return }
         }
+        // Taking a suggestion counts as using that word after the last one.
+        let before = String(editingContext().dropLast(suggestion.replacing))
+        if suggestion.insertion.hasSuffix(" ") { learn { $0.learnEnglish(endOf: before + suggestion.text) } }
+        else { learn { $0.learnChinese(suggestion.text, before: before) } }
         lastSpaceAt = .distantPast; spaceCommittedComposition = false
         for _ in 0..<suggestion.replacing { deleteCharacter() }
         insertText(suggestion.insertion)
         suggestionSpace = suggestion.insertion.hasSuffix(" ")
-        if mode == .english && !symbols && shiftState == .once { shiftState = .off; render() }
+        if mode == .letters && !symbols && shiftState == .once { shiftState = .off; render() }
+    }
+    /// Whether what is typed here may be counted: never in the hotword
+    /// editor, in password fields, or in address and number fields.
+    private var canLearn: Bool {
+        guard hotEditor == nil, extensionContext != nil else { return false }
+        let proxy = textDocumentProxy
+        if proxy.isSecureTextEntry == true { return false }
+        switch proxy.keyboardType ?? .default {
+        case .emailAddress, .URL, .numberPad, .phonePad, .decimalPad, .numbersAndPunctuation, .namePhonePad, .asciiCapableNumberPad:
+            return false
+        default: return true
+        }
+    }
+    private func learn(_ change: (inout UserLexicon) -> Void) {
+        guard canLearn else { return }
+        change(&lexicon)
+        guard !lexiconSavePending else { return }
+        lexiconSavePending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.saveLexiconNow() }
+    }
+    private func saveLexiconNow() {
+        guard lexiconSavePending else { return }
+        lexiconSavePending = false; lexicon.save()
+    }
+    /// Notes one picked candidate of the pinyin being typed. Call before the
+    /// text is inserted.
+    private func notePick(_ candidate: PinyinCandidate, from letters: String) {
+        if phraseParts.isEmpty { phraseBefore = editingContext() }
+        phraseParts.append((String(letters.prefix(candidate.consumed)), candidate.text))
+    }
+    /// The whole spelling has been turned into text: remember each choice,
+    /// and the phrase they make together.
+    private func learnPhrase() {
+        let parts = phraseParts, before = phraseBefore
+        phraseParts = []; phraseBefore = ""
+        guard !parts.isEmpty else { return }
+        learn { lexicon in
+            lexicon.learnChinese(parts.map(\.text).joined(), before: before, letters: parts.map(\.letters).joined())
+            if parts.count > 1 { for part in parts { lexicon.learnPinyin(part.letters, text: part.text) } }
+        }
     }
     private func clearVoiceUndo() {
         guard voiceUndo.isAvailable else { return }
@@ -1307,8 +1444,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func stopDeleting() { deleteTimer?.invalidate(); deleteTimer = nil; deleteGesture = nil }
     private func choose(_ candidate: PinyinCandidate) {
         guard displayedComposition == composition, displayedCandidates.contains(candidate) else { return }
+        notePick(candidate, from: composition)
         insertText(candidate.text)
-        composition = String(composition.dropFirst(candidate.consumed)); updateCandidates()
+        composition = String(composition.dropFirst(candidate.consumed))
+        if composition.isEmpty { learnPhrase() }
+        updateCandidates()
     }
     private func commitComposition() {
         guard !composition.isEmpty else { return }
@@ -1316,12 +1456,15 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         while !remaining.isEmpty {
             // Most commits use the already displayed result. A fast space tap
             // may precede decoding; serialize that fallback with the worker.
-            let options = remaining == displayedComposition ? displayedCandidates : candidateQueue.sync { pinyin.candidates(for: remaining) }
+            let options = remaining == displayedComposition ? displayedCandidates
+                : candidateQueue.sync { lexicon.rerank(pinyin.candidates(for: remaining), for: remaining) }
             if let first = options.first {
+                notePick(first, from: remaining)
                 text += first.text; remaining = String(remaining.dropFirst(first.consumed))
-            } else { text += remaining; remaining = "" }
+            } else { text += remaining; remaining = ""; phraseParts = [] }
         }
         insertText(text); composition = ""
+        learnPhrase()
         updateCandidates()
     }
     /// Puts the typed pinyin letters into the text as plain letters.
@@ -1333,7 +1476,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func updateCandidates() {
         candidateLock.lock(); candidateGeneration += 1; let generation = candidateGeneration; candidateLock.unlock()
-        let composing = mode == .pinyin && !composition.isEmpty
+        let composing = isPinyin && !composition.isEmpty
+        // Picks only count while their spelling is still being finished.
+        if composition.isEmpty { phraseParts = [] }
         pinyinLine?.isHidden = !composing
         if !composing { setCandidatesExpanded(false) }
         compositionLabel?.text = composition
@@ -1345,13 +1490,14 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         rebuildCandidateGrid()
         guard composing else { return }
         let buffer = composition
+        let learned = lexicon
         candidateQueue.async { [weak self] in
             guard let self = self else { return }
             self.candidateLock.lock(); let current = self.candidateGeneration; self.candidateLock.unlock()
             guard generation == current else { return }
-            let candidates = self.pinyin.candidates(for: buffer)
+            let candidates = learned.rerank(self.pinyin.candidates(for: buffer), for: buffer)
             DispatchQueue.main.async { [weak self] in
-                guard let self = self, self.mode == .pinyin, self.composition == buffer else { return }
+                guard let self = self, self.isPinyin, self.composition == buffer else { return }
                 self.candidateLock.lock(); let current = self.candidateGeneration; self.candidateLock.unlock()
                 guard generation == current else { return }
                 self.applyCandidates(candidates, for: buffer)
@@ -1407,10 +1553,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         scroll.setContentOffset(.zero, animated: false)
     }
     private func setCandidatesExpanded(_ expanded: Bool) {
-        candidatesExpanded = expanded && mode == .pinyin && !composition.isEmpty
+        candidatesExpanded = expanded && isPinyin && !composition.isEmpty
         candidateGrid.isHidden = !candidatesExpanded
         pageStrip.isHidden = candidatesExpanded
-        pager.isScrollEnabled = !candidatesExpanded
+        pager.isScrollEnabled = !candidatesExpanded && hotEditor == nil
         pager.accessibilityElementsHidden = candidatesExpanded
         expandCandidatesButton?.configuration?.image = UIImage(systemName: candidatesExpanded ? "chevron.up" : "chevron.down")
         expandCandidatesButton?.accessibilityLabel = candidatesExpanded ? "收起候选词" : "展开全部候选词"
@@ -1529,7 +1675,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         editor.textColor = .white; editor.backgroundColor = Lab.surface; editor.layer.cornerRadius = 9
         editor.autocorrectionType = .no; editor.autocapitalizationType = .none
         editor.spellCheckingType = .no; editor.smartQuotesType = .no; editor.smartDashesType = .no
-        // The extension's visible EN/Pinyin keys edit this text view. Do not ask
+        // The extension's visible letter keys edit this text view. Do not ask
         // UIKit to place a second system keyboard inside the keyboard extension.
         editor.inputView = UIView(frame: .zero)
         editor.inputAssistantItem.leadingBarButtonGroups = []; editor.inputAssistantItem.trailingBarButtonGroups = []
@@ -1563,7 +1709,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let bar = row([cancel, add, title, save], equal: false)
         bar.heightAnchor.constraint(equalToConstant: 32).isActive = true; hotEditorBar = bar
         content.insertArrangedSubview(bar, at: 0); content.insertArrangedSubview(editor, at: 1)
-        mode = .pinyin; shiftState = .off; symbols = false
+        mode = .letters; chinese = true; shiftState = .off; symbols = false
         modeSelector?.setEnabled(false, forSegmentAt: Mode.voice.rawValue)
         updatePreferredHeight(); render()
         editor.scrollRangeToVisible(editor.selectedRange)

@@ -12,8 +12,8 @@ struct WordSuggestion: Equatable {
 
 /// Offline word suggestions from bundled public frequency tables: the next
 /// word after the text before the cursor (Chinese and English), and
-/// completions of an English word that is being typed. Nothing the user
-/// types is stored or learned.
+/// completions of an English word that is being typed. These tables never
+/// change; what the user types often is counted in `UserLexicon`.
 final class WordSuggestions {
     enum Language { case english, chinese }
 
@@ -57,19 +57,30 @@ final class WordSuggestions {
     /// Suggestions for the text before the cursor. `language` is the page in
     /// use; it decides what an empty field offers and whether a half-typed
     /// English word is completed (on the pinyin page letters are pinyin).
-    func suggestions(before context: String, language: Language, limit: Int = 8) -> [WordSuggestion] {
+    /// `user` holds this user's own counts: their frequent words come first
+    /// and may be words the bundled tables do not have.
+    func suggestions(before context: String, language: Language, limit: Int = 8,
+                     user: UserLexicon? = nil) -> [WordSuggestion] {
         let tail = Array(context.suffix(40))
         guard let last = tail.last else { return starters(language, limit) }
         if Self.isHan(last) {
             let run = Array(tail.reversed().prefix(4).prefix(while: Self.isHan).reversed())
             var found: [String] = []
+            if let user {
+                for length in stride(from: run.count, through: 1, by: -1) {
+                    for follower in user.followers(of: String(run.suffix(length))) where !found.contains(follower) {
+                        found.append(follower)
+                    }
+                }
+            }
+            let learned = found.count
             // The longest known word ending at the cursor decides; shorter
             // endings only fill the bar when that word has few followers.
             for length in stride(from: run.count, through: 1, by: -1) {
                 for follower in chinese[String(run.suffix(length))] ?? [] where !found.contains(follower) {
                     found.append(follower)
                 }
-                if found.count >= 3 { break }
+                if found.count - learned >= 3 { break }
             }
             return found.prefix(limit).map { WordSuggestion(text: $0, replacing: 0, insertion: $0) }
         }
@@ -78,21 +89,25 @@ final class WordSuggestions {
             let typed = String(tail.reversed().prefix(while: Self.isLetter).reversed())
             guard typed.count <= 24 else { return [] }
             let lower = typed.lowercased()
-            var result: [WordSuggestion] = []
+            var matches = user?.completions(of: lower) ?? []
             for word in words[lower.utf8.first ?? 0] ?? []
             where word.utf8.count > lower.utf8.count && word.utf8.starts(with: lower.utf8) {
-                let shown = Self.styled(word, like: typed)
-                result.append(WordSuggestion(text: shown, replacing: typed.count, insertion: shown + " "))
-                if result.count >= limit { break }
+                if matches.count >= limit { break }
+                if !matches.contains(word) { matches.append(word) }
             }
-            return result
+            return matches.prefix(limit).map { word -> WordSuggestion in
+                let shown = Self.styled(word, like: typed)
+                return WordSuggestion(text: shown, replacing: typed.count, insertion: shown + " ")
+            }
         }
         if last == " " {
             let before = tail.dropLast()
             guard let previous = before.last else { return starters(language, limit) }
             if Self.isLetter(previous) {
                 let word = String(before.reversed().prefix(while: Self.isLetter).reversed()).lowercased()
-                return (english[word] ?? []).prefix(limit).map { follower -> WordSuggestion in
+                var followers = user?.followers(of: word) ?? []
+                for follower in english[word] ?? [] where !followers.contains(follower) { followers.append(follower) }
+                return followers.prefix(limit).map { follower -> WordSuggestion in
                     let shown = follower == "i" ? "I" : follower
                     return WordSuggestion(text: shown, replacing: 0, insertion: shown + " ")
                 }
@@ -119,7 +134,7 @@ final class WordSuggestions {
         if let first = typed.first, first.isUppercase { return word.prefix(1).uppercased() + word.dropFirst() }
         return word
     }
-    private static func isHan(_ character: Character) -> Bool {
+    static func isHan(_ character: Character) -> Bool {
         character.unicodeScalars.allSatisfy { (0x4E00...0x9FFF).contains($0.value) }
     }
     private static func isLetter(_ character: Character) -> Bool {

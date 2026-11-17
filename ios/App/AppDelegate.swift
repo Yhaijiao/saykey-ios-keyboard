@@ -208,24 +208,39 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
             if self?.navigationItem.prompt == shown { self?.navigationItem.prompt = nil }
         }
-        returnWhenSessionIsUp(reported: bundleID, attempts: 100)
+        triedSystemReturn = false
+        returnWhenSessionIsUp(reported: bundleID, requestedAt: Date(), attempts: 100)
     }
 
+    private var triedSystemReturn = false
     /// Once the microphone is on, go back to the app the keyboard was in.
     /// Lab is still coming to the foreground when the keyboard opens it, and
     /// the host may be learned a moment later, so keep trying until then.
-    private func returnWhenSessionIsUp(reported: String?, attempts: Int) {
+    private func returnWhenSessionIsUp(reported: String?, requestedAt: Date, attempts: Int) {
         guard attempts > 0, UIApplication.shared.applicationState != .background else { return }
-        let found = HostAppReturn.shared.host(reported: reported)
+        // First choice: the system's own "◀" action. It returns to the app
+        // the user came from without Lab having to work out which one that
+        // was. If Lab is still in front shortly after, it did not work here
+        // and the bundle ID route below takes over.
+        if !triedSystemReturn, UIApplication.shared.applicationState == .active, voice.active {
+            triedSystemReturn = true
+            if HostAppReturn.shared.goBackViaSystem() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                    self?.returnWhenSessionIsUp(reported: reported, requestedAt: requestedAt, attempts: attempts - 1)
+                }
+                return
+            }
+        }
+        let found = HostAppReturn.shared.host(reported: reported, requestedAt: requestedAt)
         guard UIApplication.shared.applicationState == .active, voice.active, let host = found else {
             if attempts == 1 {
-                let source = found.map { "检测到来源：\(HostAppReturn.displayName($0))，但未能自动返回" } ?? "没检测到来源 App"
+                let source = found.map { "检测到来源：\(HostAppReturn.displayName($0))，但未能自动返回" } ?? "没确认这次的来源 App"
                 navigationItem.prompt = voice.active
                     ? "语音会话已续上 · \(source) · 请点左上角「◀」返回"
                     : "语音会话还没开启 · \(source)"
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.returnWhenSessionIsUp(reported: reported, attempts: attempts - 1)
+                self?.returnWhenSessionIsUp(reported: reported, requestedAt: requestedAt, attempts: attempts - 1)
             }
             return
         }
