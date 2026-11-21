@@ -61,7 +61,9 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertEqual((micFrame.midX - root.bounds.midX).remainder(dividingBy: pager.bounds.width), 0, accuracy: 1)
         // Reproduce the cold extension's size negotiation, not only a detached
         // screenshot at one fixed size. No page may scroll vertically.
-        for height in [CGFloat(272), 380, 272] {
+        // It ends at the height the keyboard asks for, where every key must
+        // have its full size.
+        for height in [CGFloat(272), 380, KeyboardViewController.panelHeight] {
             hostHeight.constant = height
             host.view.layoutIfNeeded(); root.layoutIfNeeded()
             XCTAssertEqual(pager.contentSize.height, pager.bounds.height, accuracy: 1)
@@ -89,7 +91,7 @@ final class KeyboardLayoutTests: XCTestCase {
         // The language key is next to "123" at the bottom left.
         let numberFrame = visibleButton("keyboard-number-toggle", in: root).convert(visibleButton("keyboard-number-toggle", in: root).bounds, to: root)
         let languageFrame = visibleButton("keyboard-language", in: root).convert(visibleButton("keyboard-language", in: root).bounds, to: root)
-        XCTAssertEqual(numberFrame.minX, 12, accuracy: 1)
+        XCTAssertEqual(numberFrame.minX, 4, accuracy: 1, "Narrow side margins leave the width to the keys")
         XCTAssertEqual(languageFrame.minX, numberFrame.maxX + 5, accuracy: 1)
         XCTAssertEqual(languageFrame.midY, numberFrame.midY, accuracy: 1)
         if let voiceReturn = voiceReturns.first {
@@ -98,26 +100,31 @@ final class KeyboardLayoutTests: XCTestCase {
         }
         // Three fixed regions: button bar, strip, pages. The hide button is
         // the right-most control of the bar, with the page selector on its
-        // left, and the one line delete shared by all pages sits below it.
+        // left. The one line delete shared by all pages sits in the bar right
+        // after the brand, so the strip below is all suggestions.
         let hideFrame = views.first { $0.accessibilityIdentifier == "keyboard-hide" }.map { $0.convert($0.bounds, to: root) } ?? .zero
         let selectorFrame = selector.convert(selector.bounds, to: root)
         XCTAssertLessThanOrEqual(selectorFrame.maxX, hideFrame.minX)
-        XCTAssertEqual(hideFrame.maxX, root.bounds.width - 12, accuracy: 1)
+        XCTAssertEqual(hideFrame.maxX, root.bounds.width - 10, accuracy: 1)
+        let strip = views.first { $0.accessibilityIdentifier == "keyboard-strip" }!
         let lineDeletes = views.filter { $0.accessibilityIdentifier == "keyboard-delete-line" }
         XCTAssertEqual(lineDeletes.count, 1, "One line delete serves every page")
         if let lineDelete = lineDeletes.first {
             let frame = lineDelete.convert(lineDelete.bounds, to: root)
-            XCTAssertEqual(frame.minX, hideFrame.minX, accuracy: 1)
-            XCTAssertEqual(frame.maxX, hideFrame.maxX, accuracy: 1)
-            XCTAssertGreaterThanOrEqual(frame.minY, hideFrame.maxY)
-            XCTAssertLessThanOrEqual(frame.maxY, pager.convert(pager.bounds, to: root).minY)
+            let brand = views.first { $0.accessibilityIdentifier == "keyboard-brand" }!
+            XCTAssertGreaterThanOrEqual(frame.minX, brand.convert(brand.bounds, to: root).maxX - 0.5)
+            XCTAssertLessThan(frame.maxX, headerMicFrame.minX)
+            XCTAssertEqual(frame.midY, hideFrame.midY, accuracy: 1, "Line delete is in the button bar")
+            XCTAssertEqual(strip.convert(strip.bounds, to: root).width, root.bounds.width - 8, accuracy: 1,
+                           "The second row is free for suggestions across the whole width")
         }
         let firstTop = firstKeys[0].convert(firstKeys[0].bounds, to: root).minY
         XCTAssertGreaterThan(firstKeys[0].bounds.width, 0)
         XCTAssertGreaterThan(firstTop, 0)
+        XCTAssertEqual(strip.bounds.height, 36, accuracy: 1, "The bar keeps its 32 pt and the strip its 36 pt")
         let bottom = returns[0].convert(returns[0].bounds, to: root).maxY
         for key in returns {
-            XCTAssertEqual(key.bounds.height, 44, accuracy: 1)
+            XCTAssertEqual(key.bounds.height, 48, accuracy: 1)
             XCTAssertEqual(key.convert(key.bounds, to: root).maxY, bottom, accuracy: 1)
         }
         let image = UIGraphicsImageRenderer(size: root.bounds.size).image { _ in

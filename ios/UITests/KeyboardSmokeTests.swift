@@ -72,7 +72,7 @@ final class KeyboardSmokeTests: XCTestCase {
         switchLanguage(to: "英文", in: app)
         XCTAssertTrue(app.buttons["keyboard-header-mic"].exists, "Letter pages can start voice input")
         let pageBounds = app.scrollViews["keyboard-pages"].frame
-        XCTAssertLessThanOrEqual(pageBounds.height, 216, "Normal compact body must not retain the extra footer row")
+        XCTAssertLessThanOrEqual(pageBounds.height, 240, "Normal compact body must not retain the extra footer row")
         app.buttons["keyboard-return"].tap()
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("\n"))
         let voiceReturnBottom = app.buttons["keyboard-return"].frame.maxY
@@ -122,7 +122,9 @@ final class KeyboardSmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["candidate-我"].waitForExistence(timeout: 5))
         // Candidate scrolling belongs to the candidate row, not the page pager.
         app.scrollViews["pinyin-candidates"].swipeLeft()
-        XCTAssertTrue(app.staticTexts["pinyin-composition"].exists)
+        // The spelling is marked in the text field itself, not shown in the strip.
+        let stripSpelling = app.staticTexts["pinyin-composition"]
+        XCTAssertFalse(stripSpelling.exists && stripSpelling.isHittable)
         app.buttons["key-m"].tap()
         let unfinished = app.buttons["candidate-我们"]
         XCTAssertTrue(unfinished.waitForExistence(timeout: 5))
