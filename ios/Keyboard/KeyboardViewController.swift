@@ -127,6 +127,16 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     /// that was before the cursor when the first one was picked.
     private var phraseParts: [(letters: String, text: String)] = []
     private var phraseBefore = ""
+    /// The pinyin being typed is shown in the host's field as marked text,
+    /// like the iPhone keyboard. This is what is marked there now.
+    private var hostMarked = ""
+    private var hostMarkedAt = Date.distantPast
+    /// The text before the cursor when the current spelling began, before
+    /// any of it was marked in the field.
+    private var compositionBefore = ""
+    /// Only a real text field gets marked text; the hotword editor (and the
+    /// layout tests, which have no field) show the spelling in the strip.
+    private var marksInHost: Bool { hotEditor == nil && extensionContext != nil }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
@@ -139,6 +149,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         // Never leave a draft behind in a field the keyboard no longer sees;
         // a result that finishes meanwhile is inserted on return as usual.
         clearInlineDraft()
+        // Like the iPhone keyboard: letters still being spelled stay in the
+        // field as they are.
+        if !hostMarked.isEmpty {
+            textDocumentProxy.unmarkText(); hostMarked = ""; composition = ""; updateCandidates()
+        }
         voiceTimer?.invalidate(); voiceTimer = nil
         // A recording that has started keeps running while the panel is
         // hidden; the phone app does the recording, not the keyboard. It is
@@ -177,17 +192,58 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         content.axis = .vertical; content.spacing = 8
         content.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(content)
         NSLayoutConstraint.activate([
-            content.topAnchor.constraint(equalTo: view.topAnchor, constant: 14),
-            content.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
-            content.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            content.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12)
+            // Narrow side margins, like the iPhone keyboard: the width goes to
+            // the keys, which were too small and caused mistaps.
+            content.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
+            content.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6),
+            content.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 4),
+            content.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -4)
         ])
         render()
     }
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
+        dropSpellingIfHostMoved()
         // The cursor moved or the host changed the text: suggest for the new place.
         scheduleSuggestions()
+    }
+    override func selectionDidChange(_ textInput: UITextInput?) {
+        super.selectionDidChange(textInput)
+        dropSpellingIfHostMoved()
+    }
+    /// Tapping elsewhere in the field makes the host keep the marked letters
+    /// as plain text. The spelling then has to start over, or the next letter
+    /// would mark the whole spelling again at the new place.
+    private func dropSpellingIfHostMoved() {
+        guard marksInHost, !hostMarked.isEmpty, Date().timeIntervalSince(hostMarkedAt) > 0.5,
+              !(textDocumentProxy.documentContextBeforeInput ?? "").hasSuffix(hostMarked) else { return }
+        // Harmless if the host already did it; keeps the letters otherwise.
+        textDocumentProxy.unmarkText()
+        hostMarked = ""; composition = ""; updateCandidates()
+    }
+    /// Shows the spelling being typed in the field, replacing what was marked.
+    private func syncMarkedSpelling() {
+        // Opening the hotword editor mid-spelling: take the mark off the field.
+        guard marksInHost else { if extensionContext != nil { dropHostMark() }; return }
+        let wanted = isPinyin ? composition : ""
+        guard wanted != hostMarked else { return }
+        let proxy = textDocumentProxy
+        if wanted.isEmpty {
+            proxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
+            proxy.unmarkText()
+        } else {
+            if hostMarked.isEmpty { clearInlineDraft() }
+            proxy.setMarkedText(wanted, selectedRange: NSRange(location: (wanted as NSString).length, length: 0))
+        }
+        hostMarked = wanted; hostMarkedAt = Date()
+    }
+    /// Removes the marked spelling so committed text goes in its place.
+    private func dropHostMark() {
+        guard !hostMarked.isEmpty else { return }
+        let proxy = textDocumentProxy
+        proxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
+        proxy.unmarkText()
+        hostMarked = ""; hostMarkedAt = Date()
     }
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
@@ -209,7 +265,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         // Every page has the same three regions: button bar, suggestion
         // strip, keys. The voice page keeps the strip empty, so switching
         // pages never changes the panel's height.
-        let height: CGFloat = 310 + (showsSwitchFooter ? 52 : 0) + (hotEditor == nil ? 0 : 144)
+        let height: CGFloat = 332 + (showsSwitchFooter ? 52 : 0) + (hotEditor == nil ? 0 : 144)
         if heightConstraint?.constant != height {
             heightConstraint?.constant = height
             view.invalidateIntrinsicContentSize(); view.setNeedsLayout()
@@ -285,8 +341,12 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             var output = input; output.font = UIFont.systemFont(ofSize: 23); return output
         }
         button.configuration?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 22)
-        button.heightAnchor.constraint(equalToConstant: 44).isActive = true; return button
+        button.heightAnchor.constraint(equalToConstant: Self.keyHeight).isActive = true; return button
     }
+    /// Key height and the gap between key rows; a little larger than before
+    /// so keys are easier to hit.
+    static let keyHeight: CGFloat = 48
+    private static let rowGap: CGFloat = 10
     private func keyRow(_ views: [UIView], equal: Bool = true) -> KeyboardKeyRow {
         let result = KeyboardKeyRow(arrangedSubviews: views); result.spacing = 5
         if equal { result.distribution = .fillEqually }
@@ -310,7 +370,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         pager.isScrollEnabled = !candidatesExpanded && hotEditor == nil
         for (index, delta) in [1, 0, 1].enumerated() {
             let pageMode = self.pageMode(offset: delta)
-            let page = UIStackView(); page.axis = .vertical; page.spacing = 8
+            let page = UIStackView(); page.axis = .vertical; page.spacing = Self.rowGap
             page.isUserInteractionEnabled = index == 1; page.accessibilityElementsHidden = index != 1
             page.addArrangedSubview(UIView())
             if pageMode == .voice { renderVoice(content: page) } else { renderLetters(content: page) }
@@ -391,15 +451,24 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         hide.accessibilityHint = "收起后点一下输入框即可再次打开"
         let headerSpace = UIView()
         headerSpace.setContentHuggingPriority(UILayoutPriority(1), for: .horizontal)
+        // The orange line delete sits right after the brand, far from the
+        // letter keys, so a whole line is not deleted by a slip of the thumb.
+        // That leaves the second row entirely to suggestions and candidates.
+        let lineDelete = lineDeleteKey()
+        lineDelete.widthAnchor.constraint(equalToConstant: 38).isActive = true
+        lineDelete.heightAnchor.constraint(equalToConstant: 30).isActive = true
         // The hide button is the right-most control; the page selector sits
         // to its left. This row never changes, whatever is being typed.
-        let header = row([brand, undo, headerSpace, mic, newline, selector, hide], equal: false); header.alignment = .center
+        let header = row([brand, lineDelete, undo, headerSpace, mic, newline, selector, hide], equal: false); header.alignment = .center
+        header.isLayoutMarginsRelativeArrangement = true
+        header.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 6)
         let headerHeight = header.heightAnchor.constraint(equalToConstant: 32)
         headerHeight.priority = .defaultHigh; headerHeight.isActive = true
         content.addArrangedSubview(header)
         // Second row, present on every page. Letter pages show next-word
-        // suggestions here, or the pinyin being typed with its candidates.
-        // The voice page leaves it empty apart from the line delete key.
+        // suggestions here, or the candidates for the pinyin being typed (the
+        // spelling itself is marked in the text field). The voice page leaves
+        // it empty.
         let composition = Lab.label("", size: 15, color: Lab.muted)
         composition.accessibilityIdentifier = "pinyin-composition"
         composition.numberOfLines = 1
@@ -442,15 +511,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                 item.trailingAnchor.constraint(equalTo: stripContent.trailingAnchor)
             ])
         }
-        // Directly below the hide button and away from the letter keys, so
-        // a whole line is not deleted by a slip of the thumb.
-        let lineDelete = lineDeleteKey()
-        lineDelete.setContentCompressionResistancePriority(UILayoutPriority(600), for: .vertical)
-        let strip = row([stripContent, lineDelete], equal: false)
+        let strip = row([stripContent], equal: false)
         strip.accessibilityIdentifier = "keyboard-strip"
         // Below the header's priority: when the host squeezes the keyboard,
         // the strip gives up its room before any key does.
-        let stripHeight = strip.heightAnchor.constraint(equalToConstant: 30)
+        let stripHeight = strip.heightAnchor.constraint(equalToConstant: 36)
         stripHeight.priority = UILayoutPriority(700)
         NSLayoutConstraint.activate([
             candidates.topAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.topAnchor),
@@ -464,7 +529,6 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             suggestionRow.leadingAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.leadingAnchor),
             suggestionRow.trailingAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.trailingAnchor),
             suggestionRow.heightAnchor.constraint(equalTo: suggestionScroll.frameLayoutGuide.heightAnchor),
-            lineDelete.widthAnchor.constraint(equalToConstant: 38),
             stripHeight
         ])
         content.addArrangedSubview(strip)
@@ -1192,7 +1256,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         }
         suggestionSpace = false
         if isPinyin && !symbols && text.count == 1 && text.allSatisfy({ $0 >= "a" && $0 <= "z" }) {
-            guard composition.count < 64 else { return }; composition += text; updateCandidates()
+            guard composition.count < 64 else { return }
+            if composition.isEmpty { compositionBefore = editingContext() }
+            composition += text; updateCandidates()
         } else {
             commitComposition(); insertText(text)
             if mode == .letters && !symbols && shiftState == .once {
@@ -1270,7 +1336,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             let button = candidateButton(grid: false) { [weak self] in self?.chooseSuggestion(suggestion) }
             button.setTitle(suggestion.text, for: .normal)
             button.titleLabel?.font = font
-            button.layer.cornerRadius = 15
+            button.layer.cornerRadius = 18
             button.accessibilityIdentifier = "suggestion-" + suggestion.text
             let width = ceil((suggestion.text as NSString).size(withAttributes: [.font: font]).width) + 22
             button.widthAnchor.constraint(equalToConstant: max(40, width)).isActive = true
@@ -1322,7 +1388,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     /// Notes one picked candidate of the pinyin being typed. Call before the
     /// text is inserted.
     private func notePick(_ candidate: PinyinCandidate, from letters: String) {
-        if phraseParts.isEmpty { phraseBefore = editingContext() }
+        // The field may already show the marked spelling; use the text from
+        // before it began.
+        if phraseParts.isEmpty { phraseBefore = compositionBefore }
         phraseParts.append((String(letters.prefix(candidate.consumed)), candidate.text))
     }
     /// The whole spelling has been turned into text: remember each choice,
@@ -1482,6 +1550,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         pinyinLine?.isHidden = !composing
         if !composing { setCandidatesExpanded(false) }
         compositionLabel?.text = composition
+        compositionLabel?.isHidden = marksInHost
+        syncMarkedSpelling()
         suggestionScroll.isHidden = mode == .voice || composing
         scheduleSuggestions()
         displayedComposition = ""; displayedCandidates = []
@@ -1521,7 +1591,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         button.titleLabel?.textAlignment = .center
         button.clipsToBounds = true
         button.contentEdgeInsets = UIEdgeInsets(top: 0, left: grid ? 3 : 9, bottom: 0, right: grid ? 3 : 9)
-        button.layer.cornerRadius = grid ? 0 : 16
+        button.layer.cornerRadius = grid ? 0 : 18
         button.backgroundColor = grid ? Lab.background : Lab.surface
         button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return button
@@ -1596,7 +1666,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             if used + span > columns { finishRow() }
             let button = candidateButton(grid: true) { [weak self] in self?.choose(candidate) }
             button.setTitle(candidate.text, for: .normal)
-            button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+            button.heightAnchor.constraint(equalToConstant: Self.keyHeight).isActive = true
             gridConstraints.append(button.widthAnchor.constraint(equalTo: candidateGridRows.widthAnchor, multiplier: CGFloat(span) / CGFloat(columns)))
             button.accessibilityIdentifier = "grid-candidate-" + candidate.text
             buttons.append(button); used += span
@@ -1610,7 +1680,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         clearInlineDraft()
         clearVoiceUndo()
         scheduleSuggestions()
-        guard let editor = hotEditor else { textDocumentProxy.insertText(text); return }
+        guard let editor = hotEditor else { dropHostMark(); textDocumentProxy.insertText(text); return }
         let length = (editor.text as NSString).length
         let selected = editor.selectedRange
         let location = min(selected.location, length)
