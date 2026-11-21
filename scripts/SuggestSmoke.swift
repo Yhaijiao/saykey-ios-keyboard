@@ -14,13 +14,16 @@ struct SuggestSmoke {
         let started = Date()
         let engine = WordSuggestions(chinese: WordSuggestions.parseTable(try text("suggest-zh.txt")),
                                      english: WordSuggestions.parseTable(try text("suggest-en.txt")),
-                                     words: try text("suggest-en-words.txt").split(separator: "\n").map(String.init))
+                                     words: try text("suggest-en-words.txt").split(separator: "\n").map(String.init),
+                                     idioms: try text("suggest-idioms.txt").split(separator: "\n").map(String.init),
+                                     xiehouyu: WordSuggestions.parseRiddles(try text("suggest-xiehouyu.txt")))
         let loadSeconds = Date().timeIntervalSince(started)
         func texts(_ context: String, _ language: WordSuggestions.Language) -> [String] {
             engine.suggestions(before: context, language: language).map { $0.text }
         }
         for (context, language) in [("我", WordSuggestions.Language.chinese), ("今天", .chinese), ("谢谢", .chinese),
-                                    ("不好", .chinese), ("thank ", .english), ("hel", .english), ("I ", .english)] {
+                                    ("不好", .chinese), ("的", .chinese), ("好", .chinese), ("画蛇", .chinese), ("外甥打灯笼", .chinese),
+                                    ("一举", .chinese), ("thank ", .english), ("hel", .english), ("I ", .english)] {
             FileHandle.standardError.write(Data("\(context): \(texts(context, language).joined(separator: " "))\n".utf8))
         }
         FileHandle.standardError.write(Data("loaded in \(loadSeconds)s\n".utf8))
@@ -28,6 +31,15 @@ struct SuggestSmoke {
         check(texts("谢谢", .chinese).first == "你")
         check(texts("明天我们", .chinese).contains("可以"))
         check(texts("不好", .chinese).contains("意思"))
+        // Everyday words, not official prose, follow 的.
+        check(!texts("的", .chinese).prefix(4).contains("发展"))
+        check(!texts("的", .chinese).prefix(4).contains("经济"))
+        check(texts("好", .chinese).first == "的")
+        check(texts("画蛇", .chinese).first == "添足")
+        check(texts("画蛇添", .chinese).first == "足")
+        check(texts("外甥打灯笼", .chinese).first == "——照旧（舅）")
+        check(texts("黄鼠狼给鸡拜年", .chinese).first == "——没安好心")
+        check(texts("一举", .chinese).contains("两得"))
         check(texts("thank ", .english).first == "you")
         check(texts("Thank you. I ", .english).contains("have"))
         check(texts("hel", .english).contains("help"))

@@ -1,6 +1,15 @@
 """Build a bounded offline lexicon from public MIT-licensed jieba+pypinyin data.
 
 Never reads desktop hotwords. Inputs are explicit public-package paths.
+
+Besides jieba's most frequent words, the lexicon takes in (2026-11):
+- every HSK word (drkameleon/complete-hsk-vocabulary complete.json, MIT),
+  so daily vocabulary such as 微信 / 快递 is always present;
+- scripts/zh-everyday.txt, chat phrases written for SayKey (好的, 在吗);
+- idioms ranked by THUOCL_chengyu.txt (thunlp/THUOCL, MIT).
+
+    python3 scripts/build_pinyin_lexicon.py --dictionary jieba/dict.txt \
+        --hsk complete.json --idioms THUOCL_chengyu.txt --output ios/Shared/pinyin-lexicon.json
 """
 import argparse
 from collections import defaultdict
@@ -22,9 +31,45 @@ SEEDS = {
 }
 
 
+def extra_words(args, rows):
+    """Daily words, chat phrases and idioms with a frequency on jieba's scale."""
+    def at_rank(rank): return rows[min(rank, len(rows) - 1)][1]
+    known = dict(rows)
+    extra = {}
+    if args.hsk:
+        by_level = {1: at_rank(3000), 2: at_rank(5000), 3: at_rank(9000), 4: at_rank(15000),
+                    5: at_rank(25000), 6: at_rank(35000), 7: at_rank(45000)}
+        for entry in json.loads(args.hsk.read_text(encoding='utf-8')):
+            word = entry['simplified']
+            levels = [int(level.split('-')[1]) for level in entry.get('level', [])
+                      if re.fullmatch(r'(old|new)-[0-9]', level)]
+            if levels and re.fullmatch(r'[\u4e00-\u9fff]{2,6}', word):
+                extra[word] = max(known.get(word, 0), by_level.get(min(levels), at_rank(45000)))
+    if args.everyday and args.everyday.exists():
+        for line in args.everyday.read_text(encoding='utf-8').splitlines():
+            word = line.strip()
+            if re.fullmatch(r'[\u4e00-\u9fff]{2,6}', word):
+                extra[word] = max(known.get(word, 0), extra.get(word, 0), at_rank(1500))
+    if args.idioms:
+        idioms = []
+        for line in args.idioms.read_text(encoding='utf-8').splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit() and re.fullmatch(r'[\u4e00-\u9fff]{4,8}', parts[0]):
+                idioms.append((int(parts[1]), parts[0]))
+        idioms.sort(reverse=True)
+        for rank, (_, word) in enumerate(idioms[:8000]):
+            # The best known idioms rank with everyday words; rare ones stay findable.
+            extra[word] = max(known.get(word, 0), extra.get(word, 0), at_rank(12000 + rank * 6))
+    return extra
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dictionary', type=Path, required=True)
+    parser.add_argument('--hsk', type=Path)
+    parser.add_argument('--idioms', type=Path)
+    parser.add_argument('--everyday', type=Path, default=Path(__file__).with_name('zh-everyday.txt'))
+    parser.add_argument('--top', type=int, default=40000)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     rows = []
@@ -34,8 +79,11 @@ def main():
         if len(parts) >= 2 and re.fullmatch(r'[\u4e00-\u9fff]{1,6}', parts[0]):
             rows.append((parts[0], int(parts[1])))
     rows.sort(key=lambda row: (-row[1], row[0]))
-    selected = dict(rows[:24000])
+    jieba_frequencies = dict(rows)
+    extra = extra_words(args, rows)
+    selected = dict(rows[:args.top])
     selected.update((word, freq) for word, freq in rows if len(word) == 1)
+    for word, freq in extra.items(): selected[word] = max(selected.get(word, 0), freq)
     result = defaultdict(list)
     for key, words in SEEDS.items(): result[key].extend(words)
     for word, freq in sorted(selected.items(), key=lambda row: (-row[1], row[0])):
@@ -46,7 +94,8 @@ def main():
             if re.fullmatch('[a-z]{1,32}', key) and word not in result[key] and len(result[key]) < 40:
                 result[key].append(word)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    frequencies = dict(rows)
+    frequencies = dict(jieba_frequencies)
+    for word, freq in extra.items(): frequencies[word] = max(frequencies.get(word, 0), freq)
     # Jieba's tokenizer dictionary omits productive phrases such as 我妈 / 我买.
     # Add a small public starter vocabulary; this is not personal word learning.
     common = {}

@@ -24,11 +24,42 @@ final class WordSuggestions {
     private let english: [String: [String]]
     /// English words by first letter, most frequent first.
     private var words: [UInt8: [String]] = [:]
+    /// The first two or three characters of an idiom -> the rest of it,
+    /// most used idioms first: 画蛇 -> 添足.
+    private var idiomEndings: [String: [String]] = [:]
+    /// A xiehouyu riddle -> its answer: 外甥打灯笼 -> 照旧（舅）.
+    private var riddles: [String: String] = [:]
+    /// The first four characters of a longer riddle -> the rest of it.
+    private var riddleEndings: [String: [String]] = [:]
 
-    init(chinese: [String: [String]], english: [String: [String]], words: [String]) {
+    init(chinese: [String: [String]], english: [String: [String]], words: [String],
+         idioms: [String] = [], xiehouyu: [(riddle: String, answer: String)] = []) {
         self.chinese = chinese; self.english = english
         for word in words {
             if let first = word.utf8.first { self.words[first, default: []].append(word) }
+        }
+        for idiom in idioms {
+            let characters = Array(idiom)
+            for cut in [2, 3] where cut < characters.count {
+                let key = String(characters[..<cut])
+                if idiomEndings[key, default: []].count < 4 { idiomEndings[key, default: []].append(String(characters[cut...])) }
+            }
+        }
+        for (riddle, answer) in xiehouyu where riddles[riddle] == nil {
+            riddles[riddle] = answer
+            let characters = Array(riddle)
+            if characters.count > 4 {
+                let key = String(characters[..<4])
+                if riddleEndings[key, default: []].count < 2 { riddleEndings[key, default: []].append(String(characters[4...])) }
+            }
+        }
+    }
+
+    /// One "riddle<TAB>answer" per line.
+    static func parseRiddles(_ text: String) -> [(riddle: String, answer: String)] {
+        text.split(separator: "\n").compactMap { line in
+            guard let tab = line.firstIndex(of: "\t") else { return nil }
+            return (String(line[..<tab]), String(line[line.index(after: tab)...]))
         }
     }
 
@@ -51,7 +82,9 @@ final class WordSuggestions {
             return String(decoding: data, as: UTF8.self)
         }
         return WordSuggestions(chinese: parseTable(text("suggest-zh")), english: parseTable(text("suggest-en")),
-                               words: text("suggest-en-words").split(separator: "\n").map(String.init))
+                               words: text("suggest-en-words").split(separator: "\n").map(String.init),
+                               idioms: text("suggest-idioms").split(separator: "\n").map(String.init),
+                               xiehouyu: parseRiddles(text("suggest-xiehouyu")))
     }
 
     /// Suggestions for the text before the cursor. `language` is the page in
@@ -82,6 +115,7 @@ final class WordSuggestions {
                 }
                 if found.count - learned >= 3 { break }
             }
+            found = sayings(after: tail, run: run, before: found)
             return found.prefix(limit).map { WordSuggestion(text: $0, replacing: 0, insertion: $0) }
         }
         if Self.isLetter(last) {
@@ -116,6 +150,30 @@ final class WordSuggestions {
         }
         if last.isNewline { return starters(language, limit) }
         return "。！？，、；：…".contains(last) ? starters(.chinese, limit) : []
+    }
+
+    /// Puts idiom and xiehouyu endings among the next words. A finished
+    /// riddle or three characters of an idiom are clear signals and lead;
+    /// two characters that are also an everyday word ("一个") only add
+    /// their idioms after the first few ordinary next words.
+    private func sayings(after tail: [Character], run: [Character], before found: [String]) -> [String] {
+        var leading: [String] = [], later: [String] = []
+        for length in stride(from: min(tail.count, 10), through: 4, by: -1) {
+            if let answer = riddles[String(tail.suffix(length))] { leading.append("——" + answer); break }
+        }
+        if run.count >= 4 { leading += riddleEndings[String(run.suffix(4))] ?? [] }
+        if run.count >= 3 { leading += idiomEndings[String(run.suffix(3))] ?? [] }
+        if run.count >= 2 {
+            let key = String(run.suffix(2))
+            if chinese[key] == nil { leading += (idiomEndings[key] ?? []).prefix(3) }
+            else { later += (idiomEndings[key] ?? []).prefix(2) }
+        }
+        var result: [String] = []
+        for item in leading where !result.contains(item) { result.append(item) }
+        for item in found.prefix(3) where !result.contains(item) { result.append(item) }
+        for item in later where !result.contains(item) { result.append(item) }
+        for item in found.dropFirst(3) where !result.contains(item) { result.append(item) }
+        return result
     }
 
     private func starters(_ language: Language, _ limit: Int) -> [WordSuggestion] {

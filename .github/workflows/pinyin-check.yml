@@ -9,6 +9,9 @@ on:
       - ios/Shared/pinyin-syllables.json
       - ios/Shared/VoiceResultDelivery.swift
       - scripts/PinyinSmoke.swift
+      - scripts/SuggestSmoke.swift
+      - ios/Shared/WordSuggestions.swift
+      - ios/Shared/suggest-*.txt
       - .github/workflows/pinyin-check.yml
   workflow_dispatch:
 permissions:
@@ -22,8 +25,10 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
-      - name: Compile and exercise real Swift engine
+      - name: Compile and exercise real Swift engine and suggestions
         run: |
           mkdir -p build
           swiftc -O -parse-as-library ios/Shared/PinyinEngine.swift ios/Shared/VoiceResultDelivery.swift scripts/PinyinSmoke.swift -o build/pinyin-smoke
           build/pinyin-smoke ios/Shared/pinyin-lexicon.json
+          swiftc -O -parse-as-library ios/Shared/WordSuggestions.swift ios/Shared/UserLexicon.swift ios/Shared/PinyinEngine.swift scripts/SuggestSmoke.swift -o build/suggest-smoke
+          build/suggest-smoke ios/Shared

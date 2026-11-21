@@ -21,6 +21,24 @@ final class WordSuggestionsTests: XCTestCase {
         XCTAssertEqual(pick, WordSuggestion(text: "们", replacing: 0, insertion: "们"))
     }
 
+    func testIdiomsAndXiehouyuEndings() {
+        let sayings = WordSuggestions(
+            chinese: WordSuggestions.parseTable("一个\t人 月 是 小时\n"), english: [:], words: [],
+            idioms: ["画蛇添足", "一个心眼", "一举两得"],
+            xiehouyu: WordSuggestions.parseRiddles("外甥打灯笼\t照旧（舅）\n竹篮打水\t一场空\n"))
+        func texts(_ context: String) -> [String] {
+            sayings.suggestions(before: context, language: .chinese).map { $0.text }
+        }
+        XCTAssertEqual(texts("画蛇"), ["添足"])
+        XCTAssertEqual(texts("画蛇添"), ["足"])
+        XCTAssertEqual(texts("他一举"), ["两得"])
+        XCTAssertEqual(texts("外甥打灯笼"), ["——照旧（舅）"])
+        XCTAssertEqual(texts("外甥打灯"), ["笼"], "Four characters of a riddle offer the rest of it")
+        XCTAssertEqual(texts("真是竹篮打水"), ["——一场空"])
+        XCTAssertEqual(texts("一个"), ["人", "月", "是", "心眼", "小时"],
+                       "An everyday word keeps its next words first")
+    }
+
     func testEnglishNextWordAddsASpace() {
         XCTAssertEqual(engine.suggestions(before: "Thank ", language: .english).first,
                        WordSuggestion(text: "you", replacing: 0, insertion: "you "))
