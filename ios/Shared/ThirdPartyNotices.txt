@@ -53,8 +53,9 @@ The Chinese next-word suggestion table (suggest-zh.txt) is derived from the
 Google Books Ngram Viewer 1-gram and 2-gram counts, which Google makes
 available under the Creative Commons Attribution 3.0 Unported License:
 https://creativecommons.org/licenses/by/3.0/
-Changes: counts were summed from 1980 on, reduced to the most frequent words
-and their most frequent followers, and stored without the counts.
+Changes: counts were summed from 1980 on, reweighted toward everyday language
+with wordfreq (below), reduced to the most frequent words and their most
+frequent followers, and stored without the counts.
 
 SymSpell frequency dictionaries, as shipped in symspellpy 6.10.2
 https://github.com/wolfgarbe/SymSpell
@@ -342,3 +343,69 @@ and Australian word list.  It is under the following copyright:
   LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
   OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
   SUCH DAMAGE.
+
+wordfreq 3.1.1 word frequency data
+https://github.com/rspeer/wordfreq
+
+The Chinese and English suggestion tables (suggest-zh.txt, suggest-en.txt,
+suggest-en-words.txt) and the pinyin tables (pinyin-lexicon.json,
+pinyin-costs.json, pinyin-syllables.json) use wordfreq's word frequencies
+to rank words by everyday use. wordfreq is by Robyn Speer; its data may be
+redistributed under the Creative Commons Attribution-ShareAlike 4.0
+International License: https://creativecommons.org/licenses/by-sa/4.0/
+wordfreq's data is in turn derived from sources including Google Books
+Ngrams, SUBTLEX, OpenSubtitles 2018, Wikipedia, the Leeds Internet Corpus,
+NewsCrawl, GlobalVoices, Reddit and Twitter; see its README for details.
+Changes: frequencies were used only as weights and rankings; no wordfreq
+list is shipped as is. The generated tables listed above are made available
+under the same CC BY-SA 4.0 license.
+
+THUOCL: Tsinghua Open Chinese Lexicon (idioms list, THUOCL_chengyu.txt)
+https://github.com/thunlp/THUOCL
+
+MIT License
+
+Copyright (c) 2018 THUNLP
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+chinese-xinhua (idiom pronunciations idiom.json, 歇后语 xiehouyu.json)
+https://github.com/pwxcoo/chinese-xinhua
+
+MIT License
+
+Copyright (c) 2018 PWXCOO
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

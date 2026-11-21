@@ -11,8 +11,9 @@ struct WordSuggestion: Equatable {
 }
 
 /// Offline word suggestions from bundled public frequency tables: the next
-/// word after the text before the cursor (Chinese and English), and
-/// completions of an English word that is being typed. These tables never
+/// word after the text before the cursor (Chinese and English), the rest of
+/// a Chinese idiom or 歇后语, and completions of an English word that is
+/// being typed. These tables never
 /// change; what the user types often is counted in `UserLexicon`.
 final class WordSuggestions {
     enum Language { case english, chinese }
@@ -64,10 +65,12 @@ final class WordSuggestions {
         let tail = Array(context.suffix(40))
         guard let last = tail.last else { return starters(language, limit) }
         if Self.isHan(last) {
-            let run = Array(tail.reversed().prefix(4).prefix(while: Self.isHan).reversed())
+            // Up to ten characters: the first half of a 歇后语 such as
+            // "外甥打灯笼" is a key too. Ordinary words are at most four.
+            let run = Array(tail.reversed().prefix(10).prefix(while: Self.isHan).reversed())
             var found: [String] = []
             if let user {
-                for length in stride(from: run.count, through: 1, by: -1) {
+                for length in stride(from: min(run.count, 4), through: 1, by: -1) {
                     for follower in user.followers(of: String(run.suffix(length))) where !found.contains(follower) {
                         found.append(follower)
                     }
