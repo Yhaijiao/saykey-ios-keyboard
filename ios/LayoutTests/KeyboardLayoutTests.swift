@@ -106,6 +106,7 @@ final class KeyboardLayoutTests: XCTestCase {
         let selectorFrame = selector.convert(selector.bounds, to: root)
         XCTAssertLessThanOrEqual(selectorFrame.maxX, hideFrame.minX)
         XCTAssertEqual(hideFrame.maxX, root.bounds.width - 10, accuracy: 1)
+        let strip = views.first { $0.accessibilityIdentifier == "keyboard-strip" }!
         let lineDeletes = views.filter { $0.accessibilityIdentifier == "keyboard-delete-line" }
         XCTAssertEqual(lineDeletes.count, 1, "One line delete serves every page")
         if let lineDelete = lineDeletes.first {
@@ -114,18 +115,13 @@ final class KeyboardLayoutTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(frame.minX, brand.convert(brand.bounds, to: root).maxX - 0.5)
             XCTAssertLessThan(frame.maxX, headerMicFrame.minX)
             XCTAssertEqual(frame.midY, hideFrame.midY, accuracy: 1, "Line delete is in the button bar")
-            let strip = views.first { $0.accessibilityIdentifier == "keyboard-strip" }!
             XCTAssertEqual(strip.convert(strip.bounds, to: root).width, root.bounds.width - 8, accuracy: 1,
                            "The second row is free for suggestions across the whole width")
         }
         let firstTop = firstKeys[0].convert(firstKeys[0].bounds, to: root).minY
         XCTAssertGreaterThan(firstKeys[0].bounds.width, 0)
         XCTAssertGreaterThan(firstTop, 0)
-        for identifier in ["keyboard-mode-selector", "keyboard-strip", "keyboard-pages"] {
-            let item = views.first { $0.accessibilityIdentifier == identifier }!
-            print("Layout \(identifier): \(item.convert(item.bounds, to: root))")
-        }
-        for key in returns { print("Layout return: \(key.convert(key.bounds, to: root))") }
+        XCTAssertEqual(strip.bounds.height, 36, accuracy: 1, "The bar keeps its 32 pt and the strip its 36 pt")
         let bottom = returns[0].convert(returns[0].bounds, to: root).maxY
         for key in returns {
             XCTAssertEqual(key.bounds.height, 48, accuracy: 1)

@@ -72,7 +72,7 @@ final class KeyboardSmokeTests: XCTestCase {
         switchLanguage(to: "英文", in: app)
         XCTAssertTrue(app.buttons["keyboard-header-mic"].exists, "Letter pages can start voice input")
         let pageBounds = app.scrollViews["keyboard-pages"].frame
-        XCTAssertLessThanOrEqual(pageBounds.height, 256, "Normal compact body must not retain the extra footer row")
+        XCTAssertLessThanOrEqual(pageBounds.height, 240, "Normal compact body must not retain the extra footer row")
         app.buttons["keyboard-return"].tap()
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("\n"))
         let voiceReturnBottom = app.buttons["keyboard-return"].frame.maxY

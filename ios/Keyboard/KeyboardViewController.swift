@@ -346,10 +346,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     /// Key height and the gap between key rows; a little larger than before
     /// so keys are easier to hit.
     static let keyHeight: CGFloat = 48
-    /// Panel height without the globe footer or hotword editor. It leaves a
-    /// little slack above 10 + 32 + 8 + 36 + 8 + (4 rows) + 6, because the
-    /// system may draw the bar's page selector taller than 32 pt.
-    static let panelHeight: CGFloat = 344
+    /// Panel height without the globe footer or hotword editor:
+    /// 10 + bar 32 + 8 + strip 36 + 8 + four key rows 232 + 6.
+    static let panelHeight: CGFloat = 332
     private static let rowGap: CGFloat = 10
     private func keyRow(_ views: [UIView], equal: Bool = true) -> KeyboardKeyRow {
         let result = KeyboardKeyRow(arrangedSubviews: views); result.spacing = 5
@@ -466,6 +465,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let header = row([brand, lineDelete, undo, headerSpace, mic, newline, selector, hide], equal: false); header.alignment = .center
         header.isLayoutMarginsRelativeArrangement = true
         header.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 6)
+        // Only these margins: a safe-area inset (e.g. a status bar above the
+        // panel) must not make the bar taller and squeeze the keys.
+        header.insetsLayoutMarginsFromSafeArea = false
         let headerHeight = header.heightAnchor.constraint(equalToConstant: 32)
         headerHeight.priority = .defaultHigh; headerHeight.isActive = true
         content.addArrangedSubview(header)
