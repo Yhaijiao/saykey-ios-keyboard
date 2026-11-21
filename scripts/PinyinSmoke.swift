@@ -80,6 +80,10 @@ struct PinyinSmoke {
         check(engine.candidates(for: "kongge").first?.text == "空格")
         check(engine.candidates(for: "shuangjikongge").first?.text == "双击空格")
         check(engine.candidates(for: "ni1").isEmpty)
+        // Common idioms by full spelling and by initials.
+        check(engine.candidates(for: "huashetianzu").first?.text == "画蛇添足")
+        check(engine.candidates(for: "yishierniao").first?.text == "一石二鸟")
+        check(engine.candidates(for: "hstz").contains { $0.text == "画蛇添足" })
         var delivery = VoiceResultDelivery()
         let documentID = UUID()
         delivery.begin("job1", documentID: documentID)

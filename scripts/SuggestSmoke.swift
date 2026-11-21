@@ -20,7 +20,7 @@ struct SuggestSmoke {
             engine.suggestions(before: context, language: language).map { $0.text }
         }
         for (context, language) in [("我", WordSuggestions.Language.chinese), ("今天", .chinese), ("谢谢", .chinese),
-                                    ("不好", .chinese), ("thank ", .english), ("hel", .english), ("I ", .english)] {
+                                    ("不好", .chinese), ("的", .chinese), ("画蛇", .chinese), ("外甥打灯笼", .chinese), ("thank ", .english), ("hel", .english), ("I ", .english)] {
             FileHandle.standardError.write(Data("\(context): \(texts(context, language).joined(separator: " "))\n".utf8))
         }
         FileHandle.standardError.write(Data("loaded in \(loadSeconds)s\n".utf8))
@@ -33,6 +33,16 @@ struct SuggestSmoke {
         check(texts("hel", .english).contains("help"))
         check(engine.suggestions(before: "Hel", language: .english).contains(
             WordSuggestion(text: "Help", replacing: 3, insertion: "Help ")))
+        // Everyday followers, not book language.
+        check(!texts("的", .chinese).prefix(3).contains("发展"))
+        check(texts("的", .chinese).contains("时候"))
+        // Idioms and 歇后语.
+        check(texts("画蛇", .chinese).first == "添足")
+        check(texts("我说他是画蛇", .chinese).first == "添足")
+        check(texts("一石", .chinese).contains("二鸟"))
+        check(texts("外甥打灯笼", .chinese).first?.hasPrefix("——") == true)
+        check(texts("真是外甥打灯笼", .chinese).first?.hasPrefix("——") == true)
+        check(texts("不可", .chinese).prefix(3).contains("能"))
         check(texts("hel", .chinese).isEmpty)
         check(texts("", .chinese) == WordSuggestions.chineseStarters)
         check(texts("", .english) == WordSuggestions.englishStarters)
