@@ -61,7 +61,9 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertEqual((micFrame.midX - root.bounds.midX).remainder(dividingBy: pager.bounds.width), 0, accuracy: 1)
         // Reproduce the cold extension's size negotiation, not only a detached
         // screenshot at one fixed size. No page may scroll vertically.
-        for height in [CGFloat(272), 380, 272] {
+        // It ends at the height the keyboard asks for (332), where every key
+        // must have its full size.
+        for height in [CGFloat(272), 380, 332] {
             hostHeight.constant = height
             host.view.layoutIfNeeded(); root.layoutIfNeeded()
             XCTAssertEqual(pager.contentSize.height, pager.bounds.height, accuracy: 1)
