@@ -265,7 +265,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         // Every page has the same three regions: button bar, suggestion
         // strip, keys. The voice page keeps the strip empty, so switching
         // pages never changes the panel's height.
-        let height: CGFloat = 332 + (showsSwitchFooter ? 52 : 0) + (hotEditor == nil ? 0 : 144)
+        let height: CGFloat = Self.panelHeight + (showsSwitchFooter ? 52 : 0) + (hotEditor == nil ? 0 : 144)
         if heightConstraint?.constant != height {
             heightConstraint?.constant = height
             view.invalidateIntrinsicContentSize(); view.setNeedsLayout()
@@ -346,6 +346,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     /// Key height and the gap between key rows; a little larger than before
     /// so keys are easier to hit.
     static let keyHeight: CGFloat = 48
+    /// Panel height without the globe footer or hotword editor. It leaves a
+    /// little slack above 10 + 32 + 8 + 36 + 8 + (4 rows) + 6, because the
+    /// system may draw the bar's page selector taller than 32 pt.
+    static let panelHeight: CGFloat = 344
     private static let rowGap: CGFloat = 10
     private func keyRow(_ views: [UIView], equal: Bool = true) -> KeyboardKeyRow {
         let result = KeyboardKeyRow(arrangedSubviews: views); result.spacing = 5

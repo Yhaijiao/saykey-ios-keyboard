@@ -61,9 +61,9 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertEqual((micFrame.midX - root.bounds.midX).remainder(dividingBy: pager.bounds.width), 0, accuracy: 1)
         // Reproduce the cold extension's size negotiation, not only a detached
         // screenshot at one fixed size. No page may scroll vertically.
-        // It ends at the height the keyboard asks for (332), where every key
-        // must have its full size.
-        for height in [CGFloat(272), 380, 332] {
+        // It ends at the height the keyboard asks for, where every key must
+        // have its full size.
+        for height in [CGFloat(272), 380, KeyboardViewController.panelHeight] {
             hostHeight.constant = height
             host.view.layoutIfNeeded(); root.layoutIfNeeded()
             XCTAssertEqual(pager.contentSize.height, pager.bounds.height, accuracy: 1)
@@ -121,6 +121,11 @@ final class KeyboardLayoutTests: XCTestCase {
         let firstTop = firstKeys[0].convert(firstKeys[0].bounds, to: root).minY
         XCTAssertGreaterThan(firstKeys[0].bounds.width, 0)
         XCTAssertGreaterThan(firstTop, 0)
+        for identifier in ["keyboard-mode-selector", "keyboard-strip", "keyboard-pages"] {
+            let item = views.first { $0.accessibilityIdentifier == identifier }!
+            print("Layout \(identifier): \(item.convert(item.bounds, to: root))")
+        }
+        for key in returns { print("Layout return: \(key.convert(key.bounds, to: root))") }
         let bottom = returns[0].convert(returns[0].bounds, to: root).maxY
         for key in returns {
             XCTAssertEqual(key.bounds.height, 48, accuracy: 1)
