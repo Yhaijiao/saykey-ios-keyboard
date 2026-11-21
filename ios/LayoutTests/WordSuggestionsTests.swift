@@ -21,6 +21,18 @@ final class WordSuggestionsTests: XCTestCase {
         XCTAssertEqual(pick, WordSuggestion(text: "们", replacing: 0, insertion: "们"))
     }
 
+    func testIdiomsAndXiehouyuComplete() {
+        let sayings = WordSuggestions(
+            chinese: WordSuggestions.parseTable("画蛇\t添足\n外甥打灯笼\t——照旧（舅）\n灯笼\t的\n"),
+            english: [:], words: [])
+        func texts(_ context: String) -> [String] {
+            sayings.suggestions(before: context, language: .chinese).map { $0.text }
+        }
+        XCTAssertEqual(texts("他这是画蛇"), ["添足"])
+        XCTAssertEqual(texts("真是外甥打灯笼"), ["——照旧（舅）", "的"], "The longer saying comes before the word")
+        XCTAssertEqual(sayings.suggestions(before: "外甥打灯笼", language: .chinese).first?.insertion, "——照旧（舅）")
+    }
+
     func testEnglishNextWordAddsASpace() {
         XCTAssertEqual(engine.suggestions(before: "Thank ", language: .english).first,
                        WordSuggestion(text: "you", replacing: 0, insertion: "you "))
