@@ -6,16 +6,27 @@ on:
         description: 只发布：填一次已通过的构建编号，把它的安装包发到 SideStore 固定下载地址（不重新编译）
         required: false
         default: ''
+      simulator_tests:
+        description: 同时跑模拟器界面测试（多用约 15 分钟 Mac 时间；改了键盘布局或发版前再勾）
+        type: boolean
+        required: false
+        default: false
   push:
     branches: [main]
 permissions:
   contents: read
 concurrency:
-  group: capswriter-ios-${{ github.ref }}
+  group: capswriter-ios-${{ github.ref }}-${{ inputs.publish_run_id }}
   cancel-in-progress: true
+env:
+  # Public, release-only repository. The app's update button downloads
+  # releases/download/lab-phone-asr/CapsWriterLab-sideload.ipa from here,
+  # so the code repository itself can stay private.
+  RELEASES_REPO: Yhaijiao/saykey-releases
+  RELEASE_TAG: lab-phone-asr
 jobs:
   # Same as 发布实验包.ps1: put a passed build's IPA on the fixed
-  # lab-phone-asr release that Lab's "用 SideStore 安装更新" downloads.
+  # download that Lab's "用 SideStore 安装更新" opens.
   publish:
     if: github.event_name == 'workflow_dispatch' && inputs.publish_run_id != ''
     runs-on: ubuntu-latest
@@ -25,14 +36,20 @@ jobs:
       actions: read
     env:
       GH_TOKEN: ${{ github.token }}
+      RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
       RUN_ID: ${{ inputs.publish_run_id }}
     steps:
       - name: Check the build passed
         run: |
           case "$RUN_ID" in (*[!0-9]*|'') echo "构建编号只能是数字"; exit 1;; esac
+          if [ -z "$RELEASES_TOKEN" ]; then
+            echo "缺少 RELEASES_TOKEN：请在本仓库 Settings → Secrets and variables → Actions 里添加（能写 $RELEASES_REPO 的令牌）"
+            exit 1
+          fi
           gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion,headBranch,headSha,workflowName \
             --jq '"\(.workflowName) · \(.headBranch) · \(.headSha[0:7]) · \(.conclusion)"'
           test "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion --jq .conclusion)" = success
+          echo "HEAD_SHA=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json headSha --jq '.headSha[0:7]')" >> "$GITHUB_ENV"
       - name: Download and verify the IPA
         run: |
           gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name CapsWriterLab-IPA --dir ipa
@@ -41,16 +58,41 @@ jobs:
           test -n "$IPA"
           sha256sum -c SHA256SUMS.txt
           echo "安装包：$IPA"
+          VERSION=${IPA#CapsWriterLab-}
+          echo "VERSION=${VERSION%-sideload.ipa}" >> "$GITHUB_ENV"
+          echo "SHA256=$(sha256sum "$IPA" | cut -d' ' -f1)" >> "$GITHUB_ENV"
           cp "$IPA" "$RUNNER_TEMP/CapsWriterLab-sideload.ipa"
-      - name: Upload to the fixed SideStore download
-        run: gh release upload lab-phone-asr "$RUNNER_TEMP/CapsWriterLab-sideload.ipa" --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Upload to the public release-only repository
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          NOTES="SayKey Lab $VERSION（构建 $RUN_ID，提交 $HEAD_SHA）
+          SHA-256：$SHA256
+          在 Lab「更新与续签」点「用 SideStore 安装更新」即可安装。"
+          if ! gh release view "$RELEASE_TAG" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$RELEASES_REPO" --title "SayKey Lab 安装包" --notes "$NOTES"
+          fi
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/CapsWriterLab-sideload.ipa" --repo "$RELEASES_REPO" --clobber
+          gh release edit "$RELEASE_TAG" --repo "$RELEASES_REPO" --notes "$NOTES"
+          echo "已发布：https://github.com/$RELEASES_REPO/releases/download/$RELEASE_TAG/CapsWriterLab-sideload.ipa"
+      - name: Also refresh the old download in this repository
+        # Phones on 0.4.28 or older still open this repository's release.
+        # Once this repository is private they can no longer reach it, so
+        # a failure here never blocks publishing.
+        continue-on-error: true
+        run: gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/CapsWriterLab-sideload.ipa" --repo "$GITHUB_REPOSITORY" --clobber
 
-  build:
+  # Linux minutes cost a tenth of macOS minutes on a private repository,
+  # so everything that does not need Xcode runs here.
+  checks:
     if: github.event_name != 'workflow_dispatch' || inputs.publish_run_id == ''
-    runs-on: macos-15-intel
-    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Validate source and bridge behavior
         run: |
           python3 -B scripts/check_sources.py
@@ -58,6 +100,17 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/cw-bridge-venv"
           "$RUNNER_TEMP/cw-bridge-venv/bin/pip" install -r bridge/requirements.txt
           "$RUNNER_TEMP/cw-bridge-venv/bin/python" -B -m unittest discover -s bridge -p 'test_*.py' -v
+
+  build:
+    needs: checks
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    env:
+      # Simulator UI tests take ~15 of the ~18 macOS minutes. Run them on
+      # main and when asked; everyday builds stop after the IPA.
+      RUN_SIMULATOR_TESTS: ${{ github.event_name == 'push' || inputs.simulator_tests }}
+    steps:
+      - uses: actions/checkout@v4
       - name: Check toolchain
         run: |
           SELECTED_XCODE=$(python3 -c 'import glob,re; paths=[(tuple(map(int,m.group(1).split("."))),p) for p in glob.glob("/Applications/Xcode_*.app") if (m:=re.search(r"Xcode_(\d+(?:\.\d+)*)\.app$",p))]; print(max(paths)[1]+"/Contents/Developer" if paths else "")')
@@ -105,11 +158,11 @@ jobs:
           done
           codesign --verify --deep --strict "$APP"
           cd artifacts
-          zip -qr CapsWriterLab-0.4.27-sideload.ipa Payload
-          shasum -a 256 CapsWriterLab-0.4.27-sideload.ipa > SHA256SUMS.txt
+          zip -qr CapsWriterLab-0.4.28-sideload.ipa Payload
+          shasum -a 256 CapsWriterLab-0.4.28-sideload.ipa > SHA256SUMS.txt
           rm -r Payload
       - name: Verify package
-        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.4.27-sideload.ipa 0.4.27
+        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.4.28-sideload.ipa 0.4.28
       - name: Upload install package before simulator tests
         uses: actions/upload-artifact@v4
         with:
@@ -119,6 +172,7 @@ jobs:
             artifacts/SHA256SUMS.txt
           retention-days: 14
       - name: Build simulator and take screenshot
+        if: env.RUN_SIMULATOR_TESTS == 'true'
         run: |
           set -o pipefail
           xcodebuild -project CapsWriterKeyboard.xcodeproj -scheme CapsWriterLab \
@@ -137,6 +191,7 @@ jobs:
           xcrun simctl io "$DEVICE_ID" screenshot artifacts/app-simulator.png
           echo "$DEVICE_ID" > build/simulator-device-id.txt
       - name: Validate keyboard construction and row alignment
+        if: env.RUN_SIMULATOR_TESTS == 'true'
         timeout-minutes: 10
         run: |
           set -o pipefail
@@ -152,7 +207,7 @@ jobs:
             --output-path artifacts/layout-test-attachments || true
           exit "$TEST_RESULT"
       - name: Upload keyboard layout validation
-        if: always()
+        if: always() && env.RUN_SIMULATOR_TESTS == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: CapsWriterLab-LayoutValidation
@@ -162,6 +217,7 @@ jobs:
             test-keyboard-layout.log
           retention-days: 14
       - name: Exercise real keyboard in simulator
+        if: env.RUN_SIMULATOR_TESTS == 'true'
         timeout-minutes: 22
         run: |
           set -o pipefail
@@ -182,7 +238,7 @@ jobs:
           xcrun simctl shutdown "$DEVICE_ID"
           exit "$TEST_RESULT"
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && env.RUN_SIMULATOR_TESTS == 'true'
         with:
           name: CapsWriterLab-iPhone
           path: |

@@ -34,7 +34,7 @@ iOS 不允许键盘扩展直接使用麦克风，所以录音由主 App 在后�
 ## 安装
 
 1. 手机上先装好 [SideStore](https://sidestore.io/)。
-2. 用 SideStore 安装最新的 `CapsWriterLab-sideload.ipa`（在本仓库的 Releases 页面，标签 `lab-phone-asr`）。
+2. 用 SideStore 安装最新的 `CapsWriterLab-sideload.ipa`（在公开的安装包仓库 [Yhaijiao/saykey-releases](https://github.com/Yhaijiao/saykey-releases/releases) 里，标签 `lab-phone-asr`）。
 3. 设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → **SayKey Lab**，并开启"允许完全访问"（语音功能需要，纯打字不需要）。
 4. 打开 SayKey Lab 主 App，填入识别服务的地址和配对码（也可以扫配对二维码），在"开启语音会话"一栏开启会话。
 5. 在任意输入框长按地球键切到 SayKey，就可以开始用了。
@@ -51,7 +51,7 @@ iOS 不允许键盘扩展直接使用麦克风，所以录音由主 App 在后�
 
 ## 自己编译
 
-公开仓库用 GitHub 的 macOS 机器免费编译，产物是未签名的 IPA，需要用自己的 Apple ID 签名后安装。本地 Mac 也可以：
+在 GitHub Actions 的 macOS 机器上编译，产物是未签名的 IPA，需要用自己的 Apple ID 签名后安装。发布流程见 [docs/RELEASE.zh-CN.md](docs/RELEASE.zh-CN.md)。本地 Mac 也可以：
 
 ```sh
 brew install xcodegen

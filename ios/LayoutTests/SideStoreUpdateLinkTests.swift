@@ -13,6 +13,6 @@ final class SideStoreUpdateLinkTests: XCTestCase {
         let download = try XCTUnwrap(URLComponents(string: address))
         XCTAssertEqual(download.scheme, "https")
         XCTAssertEqual(download.host, "github.com")
-        XCTAssertEqual(download.path, "/Yhaijiao/saykey-ios-keyboard/releases/download/lab-phone-asr/CapsWriterLab-sideload.ipa")
+        XCTAssertEqual(download.path, "/Yhaijiao/saykey-releases/releases/download/lab-phone-asr/CapsWriterLab-sideload.ipa")
     }
 }
