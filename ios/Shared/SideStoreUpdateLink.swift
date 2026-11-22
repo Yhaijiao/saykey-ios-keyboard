@@ -1,7 +1,7 @@
 import Foundation
 
 enum SideStoreUpdateLink {
-    private static let download = "https://github.com/Yhaijiao/saykey-ios-keyboard/releases/download/lab-phone-asr/CapsWriterLab-sideload.ipa"
+    private static let download = "https://github.com/Yhaijiao/saykey-releases/releases/download/lab-phone-asr/CapsWriterLab-sideload.ipa"
 
     static func make() -> URL? {
         var link = URLComponents()
