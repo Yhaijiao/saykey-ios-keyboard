@@ -29,6 +29,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         default: return false
         }
     }
+    func applicationWillTerminate(_ application: UIApplication) {
+        VoiceIntentCoordinator.shared.session.stop(message: "语音会话已关闭。")
+    }
 }
 
 final class LabViewController: UIViewController, UITextViewDelegate {
