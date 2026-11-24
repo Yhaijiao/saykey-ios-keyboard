@@ -981,11 +981,22 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         }
     }
     private static let voicePollGrace: TimeInterval = 20
+    /// A live Lab polls every 0.35 s and acknowledges `pending` at once.
+    /// If a job stays `pending` past this window, Lab was closed — jump to it.
+    private static let pendingAckTimeout: TimeInterval = 1.5
     private func handleVoice(_ result: Result<BridgeReply, Error>) {
         switch result {
         case .failure(let error):
+            let wasPending = voiceState == "pending"
             voiceAgentReady = nil
-            cancelVoice(); resetVoice(error.localizedDescription)
+            cancelVoice()
+            if wasPending, canOpenContainingApp, !BridgeError.isTransient(error) {
+                voiceAgentReady = false
+                resetVoice("")
+                renewSessionInLab()
+                return
+            }
+            resetVoice(error.localizedDescription)
         case .success(let reply):
             voiceState = reply.state ?? "idle"
             if ["recording", "stopping", "processing"].contains(voiceState),
@@ -994,7 +1005,15 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                 showInlineDraft()
             }
             switch voiceState {
-            case "pending": voiceMessage = "正在启动手机录音，请稍候…"
+            case "pending":
+                if canOpenContainingApp, Date().timeIntervalSince(voiceStarted) >= Self.pendingAckTimeout {
+                    voiceAgentReady = false
+                    cancelVoice()
+                    resetVoice("")
+                    renewSessionInLab()
+                    return
+                }
+                voiceMessage = "正在启动手机录音，请稍候…"
             case "recording": voiceMessage = "正在录音 · 说完点击停止（最长 5 分钟）"
             case "stopping", "processing": voiceMessage = "正在识别语音，完成后自动上屏…"
             case "done":
