@@ -273,11 +273,12 @@ final class HostAppReturn: NSObject {
     }
 
     /// Compact, privacy-free diagnostic code shown only when auto-return fails.
-    func diagnosticSummary() -> String {
+    func diagnosticSummary(reported: String?) -> String {
         let nav = systemNavigationActions().count
         let cur = Self.source(of: observed?.value(forKey: "currentState") as? NSObject) != nil ? 1 : 0
         let obs = lastHost != nil ? 1 : 0
-        return "[nav:\(nav) kb:\(cur)/\(obs)]"
+        let rep = reported.flatMap { Self.isOwn($0) ? nil : $0 } != nil ? 1 : 0
+        return "[nav:\(nav) kb:\(cur)/\(obs) rep:\(rep)]"
     }
 
     /// A readable name for the status line.
