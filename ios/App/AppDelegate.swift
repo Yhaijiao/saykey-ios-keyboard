@@ -285,6 +285,12 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         let showFallbackHint: () -> Void = { [weak self] in
             self?.navigationItem.prompt = "语音会话已续上 · 检测到来源：\(HostAppReturn.displayName(host))，此 App 暂不支持自动返回 · 请点左上角「◀」"
         }
+        // Home Screen web apps run inside a shared web app shell; opening
+        // the shell shows a blank temporary page instead of the web app.
+        if HostAppReturn.isWebAppShell(host) {
+            navigationItem.prompt = "语音会话已续上 · 网页版 App 无法自动返回 · 请点左上角「◀」"
+            return
+        }
         let openedByScheme = HostAppReturn.shared.open(host) {
             if !Self.openApplication(host) { showFallbackHint() }
         }
