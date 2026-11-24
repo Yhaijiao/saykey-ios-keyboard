@@ -239,8 +239,8 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         // was. If Lab is still in front shortly after, it did not work here
         // and the bundle ID route below takes over.
         if !triedSystemReturn, state == .active, voice.active {
-            triedSystemReturn = true
             if HostAppReturn.shared.goBackViaSystem() {
+                triedSystemReturn = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                     self?.returnWhenSessionIsUp(reported: reported, requestedAt: requestedAt,
                                                 attempts: attempts - 1, sawActive: nowActive, token: token)
@@ -250,8 +250,17 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         }
         let found = HostAppReturn.shared.host(reported: reported, requestedAt: requestedAt)
         guard state == .active, voice.active, let host = found else {
+            if state == .active, voice.active, !triedSystemReturn, HostAppReturn.shared.openSystemNavigationURL() {
+                triedSystemReturn = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                    self?.returnWhenSessionIsUp(reported: reported, requestedAt: requestedAt,
+                                                attempts: attempts - 1, sawActive: nowActive, token: token)
+                }
+                return
+            }
             if attempts == 75 || attempts == 1 {
-                let source = found.map { "检测到来源：\(HostAppReturn.displayName($0))，正在尝试返回" } ?? "没确认这次的来源 App"
+                let diag = HostAppReturn.shared.diagnosticSummary()
+                let source = found.map { "检测到来源：\(HostAppReturn.displayName($0))，正在尝试返回" } ?? "没确认这次的来源 App \(diag)"
                 navigationItem.prompt = voice.active
                     ? "语音会话已续上 · \(source) · 也可点左上角「◀」返回"
                     : "语音会话还没开启 · \(source)"
