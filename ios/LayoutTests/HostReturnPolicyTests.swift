@@ -37,6 +37,11 @@ final class HostReturnPolicyTests: XCTestCase {
         XCTAssertEqual(decide(current: "app.muse", observed: ("app.muse", -60), backgrounded: -600, after: 1), .open("app.muse"))
     }
 
+    func testColdLaunchHostIsTrustedEvenAfterSlowLaunch() {
+        XCTAssertEqual(decide(current: "app.muse", observed: ("app.muse", -5), backgrounded: nil), .open("app.muse"))
+        XCTAssertEqual(decide(current: nil, observed: ("app.muse", -5), backgrounded: nil), .open("app.muse"))
+    }
+
     func testNothingKnown() {
         XCTAssertEqual(decide(), .wait)
         XCTAssertEqual(decide(after: 1), .unknown)

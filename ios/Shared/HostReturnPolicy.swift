@@ -34,6 +34,9 @@ enum HostReturnPolicy {
                        requestedAt: Date, backgroundedAt: Date?, now: Date) -> Decision {
         if let reported { return .open(reported) }
         if let observed, observed.at >= requestedAt.addingTimeInterval(-freshMargin) { return .open(observed.id) }
+        // On a cold launch Lab has never been backgrounded, so there is no
+        // earlier visit whose host could be stale.
+        if backgroundedAt == nil, let host = current ?? observed?.id { return .open(host) }
         // The state changed without an event reaching us: that is news too.
         if let current, current != observed?.id { return .open(current) }
         guard now.timeIntervalSince(requestedAt) >= settleTime else { return .wait }
