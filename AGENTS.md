@@ -39,8 +39,8 @@ SayKey 是一款 iPhone 第三方键盘：语音输入 + 离线拼音 + 英文�
 - 本地 `private/` 目录（在 .gitignore 里）放的是私有运行数据，不要扫描、上传、提交。
 
 ### 版本号
-- 每次要发布的改动，在 `project.yml` 里同时加 `MARKETING_VERSION`（如 0.4.28 → 0.4.29）和 `CURRENT_PROJECT_VERSION`（41 → 42）。版本号只在这一个文件里。
-- 当前已发布：**v0.4.28（build 41）**。下一个是 **v0.4.29（build 42）**。
+- 每次要发布的改动，在 `project.yml` 里同时加 `MARKETING_VERSION`（如 0.4.34 → 0.4.35）和 `CURRENT_PROJECT_VERSION`（47 → 48），并同步修改 `.github/workflows/build-ios.yml` 里 IPA 打包和 `verify_ipa.py` 的版本号。
+- 当前已发布：**v0.4.34（build 47）**。下一个是 **v0.4.35（build 48）**。
 
 ### 发布
 - **一批功能全部做完后再发布一次**，不要每做一个功能就发一次；一批做到一半时不要发。
@@ -62,12 +62,12 @@ SayKey 是一款 iPhone 第三方键盘：语音输入 + 离线拼音 + 英文�
 
 | 路径 | 内容 |
 | --- | --- |
-| `ios/App/` | 主 App SayKey Lab：录音会话（`VoiceSession.swift`）、配对、热词、更新入口（`AppDelegate.swift`） |
-| `ios/Keyboard/` | 键盘扩展：`KeyboardViewController.swift`（布局、拼音、语音页、上屏） |
-| `ios/Shared/` | 主 App 和键盘共用：拼音引擎、联想词、配对、草稿上屏、更新链接（`SideStoreUpdateLink.swift`）、词库数据 |
+| `ios/App/` | 主 App SayKey Lab：录音会话（`VoiceSession.swift`）、配对、热词、自动跳回（`HostAppReturn.swift`）、更新入口（`AppDelegate.swift`） |
+| `ios/Keyboard/` | 键盘扩展：`KeyboardViewController.swift`（布局、拼音、语音页、上屏）、宿主探测（`HostAppProbe.swift`） |
+| `ios/Shared/` | 主 App 和键盘共用：拼音引擎、联想词、配对、草稿上屏、跳回策略与宿主解析（`HostReturnPolicy.swift`）、更新链接（`SideStoreUpdateLink.swift`）、词库数据 |
 | `ios/VoiceActivity/`, `ios/IntentShared/` | 灵动岛 / 锁屏实时活动、App Intents |
 | `ios/LayoutTests/`, `ios/UITests/` | 单元测试和界面测试 |
-| `bridge/` | 家里电脑的 Python 语音桥接（`server.py`、`voice.py`、热词 `hotwords.py`、纠错 `engine.py`、口语清理 `cleanup.py`、边说边上屏 `stream.py`） |
+| `bridge/` | 家里电脑的 Python 语音桥接（`server.py`、`voice.py`、热词 `hotwords.py`、纠错 `engine.py`、口语清理与阿拉伯数字 `cleanup.py`、本地大模型润色 `polish.py`、边说边上屏 `stream.py`） |
 | `cloud/` | AWS / Linux 服务器部署脚本（网关、HTTPS、自动关机），暂停中 |
 | `scripts/` | 词库生成、冒烟测试、发布校验 |
 | `project.yml` | XcodeGen 工程定义，版本号在这里 |
