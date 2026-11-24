@@ -51,6 +51,12 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     private var autoStartPolicy = VoiceSessionAutoStartPolicy()
     private let voiceStatus = Theme.label("语音会话未开启 · 麦克风关闭", size: 14, color: Theme.muted)
     private let status = Theme.label("未连接识别服务 · 基本键盘输入无需联网", size: 14, color: Theme.muted)
+    /// Short hints after the keyboard sends the user here. Floats over the
+    /// page instead of using the navigation bar prompt, which made the bar
+    /// taller and squeezed the top of the page.
+    private let notice = Theme.label("", size: 13, color: .white)
+    private let noticeBox = UIView()
+    private var noticeToken = UUID()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -83,6 +89,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -24),
             stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -48)
         ])
+        installNotice()
         stack.addArrangedSubview(Theme.header(version: Lab.version))
         stack.setCustomSpacing(14, after: stack.arrangedSubviews[0])
         stack.addArrangedSubview(Theme.slogan("你的声音，从这里开始。"))
@@ -197,7 +204,43 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     @objc private func appBecameActive() { beginAutomaticSessionIfNeeded() }
     @objc private func appEnteredBackground() {
         autoStartPolicy.enteredBackground()
-        navigationItem.prompt = nil
+        showNotice(nil)
+    }
+
+    private func installNotice() {
+        noticeBox.backgroundColor = UIColor.black.withAlphaComponent(0.78)
+        noticeBox.layer.cornerRadius = 12
+        noticeBox.isHidden = true
+        noticeBox.isUserInteractionEnabled = false
+        noticeBox.translatesAutoresizingMaskIntoConstraints = false
+        notice.numberOfLines = 3
+        notice.textAlignment = .center
+        notice.translatesAutoresizingMaskIntoConstraints = false
+        noticeBox.addSubview(notice)
+        view.addSubview(noticeBox)
+        NSLayoutConstraint.activate([
+            noticeBox.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 6),
+            noticeBox.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            noticeBox.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            notice.topAnchor.constraint(equalTo: noticeBox.topAnchor, constant: 8),
+            notice.bottomAnchor.constraint(equalTo: noticeBox.bottomAnchor, constant: -8),
+            notice.leadingAnchor.constraint(equalTo: noticeBox.leadingAnchor, constant: 12),
+            notice.trailingAnchor.constraint(equalTo: noticeBox.trailingAnchor, constant: -12)
+        ])
+    }
+
+    /// Show a hint over the top of the page; nil hides it. It hides itself
+    /// after `seconds` unless a newer hint replaced it.
+    private func showNotice(_ text: String?, seconds: TimeInterval = 20) {
+        let token = UUID(); noticeToken = token
+        notice.text = text
+        noticeBox.isHidden = text == nil
+        guard text != nil else { return }
+        view.bringSubviewToFront(noticeBox)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            guard let self = self, self.noticeToken == token else { return }
+            self.showNotice(nil)
+        }
     }
 
     /// The keyboard found the session lapsed and sent the user here. Start or
@@ -211,11 +254,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         }
         autoStartPolicy.userStoppedOrStarted()
         voice.renew(pairing: pairing, minutes: VoiceSessionRenewal.minutes)
-        navigationItem.prompt = "语音会话续到 \(VoiceSessionRenewal.minutes) 分钟 · 点左上角「◀」返回，键盘会自动录音"
-        let shown = navigationItem.prompt
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
-            if self?.navigationItem.prompt == shown { self?.navigationItem.prompt = nil }
-        }
+        showNotice("语音会话续到 \(VoiceSessionRenewal.minutes) 分钟 · 点左上角「◀」返回，键盘会自动录音")
         triedSystemReturn = false
         HostAppReturn.shared.attachKeyboardObservers()
         let token = UUID(); returnToken = token
@@ -272,9 +311,9 @@ final class LabViewController: UIViewController, UITextViewDelegate {
                     UIPasteboard.general.string = HostAppReturn.shared.stateDumpText
                     source += " · 诊断已复制，可粘贴发给 Claude"
                 }
-                navigationItem.prompt = voice.active
+                showNotice(voice.active
                     ? "已续上 · \(source) · 点左上角◀返回"
-                    : "语音会话还没开启 · \(source)"
+                    : "语音会话还没开启 · \(source)")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 self?.returnWhenSessionIsUp(reported: reported, requestedAt: requestedAt,
@@ -283,12 +322,12 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             return
         }
         let showFallbackHint: () -> Void = { [weak self] in
-            self?.navigationItem.prompt = "语音会话已续上 · 检测到来源：\(HostAppReturn.displayName(host))，此 App 暂不支持自动返回 · 请点左上角「◀」"
+            self?.showNotice("语音会话已续上 · 检测到来源：\(HostAppReturn.displayName(host))，此 App 暂不支持自动返回 · 请点左上角「◀」")
         }
         // Home Screen web apps run inside a shared web app shell; opening
         // the shell shows a blank temporary page instead of the web app.
         if HostAppReturn.isWebAppShell(host) {
-            navigationItem.prompt = "语音会话已续上 · 网页版 App 无法自动返回 · 请点左上角「◀」"
+            showNotice("语音会话已续上 · 网页版 App 无法自动返回 · 请点左上角「◀」")
             return
         }
         let openedByScheme = HostAppReturn.shared.open(host) {
