@@ -1,3 +1,4 @@
+import ObjectiveC
 import UIKit
 
 /// Sends the user back to the app they were typing in after the keyboard
@@ -48,7 +49,16 @@ final class HostAppReturn: NSObject {
         "com.laiwang.DingTalk": "dingtalk://"
     ]
 
-    static func isOwn(_ bundleID: String) -> Bool { bundleID.hasPrefix("org.capswriterlab") }
+    private static let ignoredHosts: Set<String> = [
+        "com.apple.ScreenshotServicesService",
+        "com.apple.springboard",
+        "com.apple.Spotlight",
+        "com.apple.InputUI"
+    ]
+
+    static func isOwn(_ bundleID: String) -> Bool {
+        bundleID.hasPrefix("org.capswriterlab") || ignoredHosts.contains(bundleID)
+    }
 
     /// Start watching the system keyboard state. Call once at launch.
     func start() {
@@ -96,22 +106,120 @@ final class HostAppReturn: NSObject {
 
     /// Finds every active `UISystemNavigationAction` (the status bar "◀"
     /// action) together with its first destination index.
+    ///
+    /// On modern iOS, `_systemNavigationAction` is often a private ivar (not a
+    /// selector) on `UIApplication` or a `UIWindowScene`, so check selectors,
+    /// direct ivars, and safe object-typed ivar scans across the app and scenes.
     private func systemNavigationActions() -> [(action: NSObject, destination: UInt)] {
-        let getter = NSSelectorFromString("_systemNavigationAction")
+        let navClass: AnyClass? = NSClassFromString("UISystemNavigationAction")
         let destinationsSel = NSSelectorFromString("destinations")
-        let owners: [NSObject] = [UIApplication.shared] + UIApplication.shared.connectedScenes.map { $0 as NSObject }
-        var found: [(NSObject, UInt)] = []
-        for owner in owners where owner.responds(to: getter) {
-            guard let action = owner.perform(getter)?.takeUnretainedValue() as? NSObject else { continue }
-            var destination: UInt = 0
-            if action.responds(to: destinationsSel),
-               let list = action.perform(destinationsSel)?.takeUnretainedValue() as? [NSNumber] {
-                guard let first = list.first else { continue }
-                destination = first.uintValue
+        var owners: [NSObject] = [UIApplication.shared]
+        let mainSceneSel = NSSelectorFromString("_mainScene")
+        if UIApplication.shared.responds(to: mainSceneSel),
+           let mainScene = UIApplication.shared.perform(mainSceneSel)?.takeUnretainedValue() as? NSObject {
+            owners.append(mainScene)
+        }
+        let sceneSel = NSSelectorFromString("_scene")
+        let fbsSceneSel = NSSelectorFromString("_FBSScene")
+        for scene in UIApplication.shared.connectedScenes {
+            owners.append(scene)
+            if let windowScene = scene as? UIWindowScene, let barManager = windowScene.statusBarManager {
+                owners.append(barManager)
             }
-            found.append((action, destination))
+            if scene.responds(to: sceneSel),
+               let inner = scene.perform(sceneSel)?.takeUnretainedValue() as? NSObject {
+                owners.append(inner)
+            }
+            if scene.responds(to: fbsSceneSel),
+               let inner = scene.perform(fbsSceneSel)?.takeUnretainedValue() as? NSObject {
+                owners.append(inner)
+            }
+        }
+        var seen = Set<ObjectIdentifier>()
+        var found: [(NSObject, UInt)] = []
+        for owner in owners {
+            for action in Self.extractNavigationActions(from: owner, navClass: navClass) {
+                let key = ObjectIdentifier(action)
+                guard seen.insert(key).inserted else { continue }
+                var destination: UInt = 0
+                if action.responds(to: destinationsSel),
+                   let list = action.perform(destinationsSel)?.takeUnretainedValue() as? [NSNumber] {
+                    guard let first = list.first else { continue }
+                    destination = first.uintValue
+                }
+                found.append((action, destination))
+            }
         }
         return found
+    }
+
+    private static func isNavigationAction(_ object: NSObject, navClass: AnyClass?) -> Bool {
+        if let navClass, object.isKind(of: navClass) { return true }
+        return object.responds(to: NSSelectorFromString("sendResponseForDestination:"))
+    }
+
+    private static func collectActions(from value: Any, navClass: AnyClass?, into results: inout [NSObject]) {
+        if let obj = value as? NSObject, isNavigationAction(obj, navClass: navClass) {
+            results.append(obj)
+            return
+        }
+        if let array = value as? NSArray {
+            for item in array {
+                if let obj = item as? NSObject, isNavigationAction(obj, navClass: navClass) {
+                    results.append(obj)
+                }
+            }
+        } else if let set = value as? NSSet {
+            for item in set {
+                if let obj = item as? NSObject, isNavigationAction(obj, navClass: navClass) {
+                    results.append(obj)
+                }
+            }
+        } else if let dict = value as? NSDictionary {
+            for item in dict.allValues {
+                if let obj = item as? NSObject, isNavigationAction(obj, navClass: navClass) {
+                    results.append(obj)
+                }
+            }
+        }
+    }
+
+    private static func extractNavigationActions(from owner: NSObject, navClass: AnyClass?) -> [NSObject] {
+        var results: [NSObject] = []
+        for name in ["_systemNavigationAction", "systemNavigationAction"] {
+            let selector = NSSelectorFromString(name)
+            if owner.responds(to: selector),
+               let value = owner.perform(selector)?.takeUnretainedValue() as? NSObject {
+                collectActions(from: value, navClass: navClass, into: &results)
+            }
+            if let ivar = class_getInstanceVariable(type(of: owner), name),
+               let encPtr = ivar_getTypeEncoding(ivar),
+               String(cString: encPtr).hasPrefix("@"),
+               let value = object_getIvar(owner, ivar) {
+                collectActions(from: value, navClass: navClass, into: &results)
+            }
+        }
+        var currentClass: AnyClass? = type(of: owner)
+        while let cls = currentClass, cls != NSObject.self {
+            var count: UInt32 = 0
+            if let ivars = class_copyIvarList(cls, &count) {
+                defer { free(ivars) }
+                for index in 0..<Int(count) {
+                    let ivar = ivars[index]
+                    guard let encPtr = ivar_getTypeEncoding(ivar) else { continue }
+                    let encoding = String(cString: encPtr)
+                    guard encoding.hasPrefix("@") else { continue }
+                    let name = ivar_getName(ivar).map { String(cString: $0).lowercased() } ?? ""
+                    let matches = encoding.contains("SystemNavigationAction")
+                        || name.contains("systemnavigation")
+                        || name.contains("breadcrumb")
+                    guard matches, let value = object_getIvar(owner, ivar) else { continue }
+                    collectActions(from: value, navClass: navClass, into: &results)
+                }
+            }
+            currentClass = class_getSuperclass(cls)
+        }
+        return results
     }
 
     /// Bundle ID of the app behind the status bar "◀" breadcrumb for this
@@ -127,6 +235,22 @@ final class HostAppReturn: NSObject {
             }
         }
         return nil
+    }
+
+    /// Opens the URL exposed by `UISystemNavigationAction.URLForDestination:`
+    /// when `sendResponseForDestination:` and bundle ID lookup both fail.
+    @discardableResult
+    func openSystemNavigationURL() -> Bool {
+        let selector = NSSelectorFromString("URLForDestination:")
+        for (action, destination) in systemNavigationActions() {
+            guard action.responds(to: selector), let method = action.method(for: selector) else { continue }
+            typealias DestURL = @convention(c) (AnyObject, Selector, UInt) -> Unmanaged<NSURL>?
+            guard let url = unsafeBitCast(method, to: DestURL.self)(action, selector, destination)?.takeUnretainedValue() as URL?,
+                  url.scheme != "capswriterlab" else { continue }
+            UIApplication.shared.open(url, options: [:], completionHandler: nil)
+            return true
+        }
+        return false
     }
 
     /// Triggers the system's own "◀ back to the previous app" action, the
@@ -146,6 +270,14 @@ final class HostAppReturn: NSObject {
             }
         }
         return false
+    }
+
+    /// Compact, privacy-free diagnostic code shown only when auto-return fails.
+    func diagnosticSummary() -> String {
+        let nav = systemNavigationActions().count
+        let cur = Self.source(of: observed?.value(forKey: "currentState") as? NSObject) != nil ? 1 : 0
+        let obs = lastHost != nil ? 1 : 0
+        return "[nav:\(nav) kb:\(cur)/\(obs)]"
     }
 
     /// A readable name for the status line.
