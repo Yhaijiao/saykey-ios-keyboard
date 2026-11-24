@@ -90,9 +90,10 @@ class EngineResult:
 class DesktopEngine:
     mode = 'desktop-shared-hotword-source'
 
-    def __init__(self, root, *, snapshot=None, cleaner=None):
+    def __init__(self, root, *, snapshot=None, cleaner=None, polisher=None):
         self.root = Path(root)
         self.cleaner = cleaner
+        self.polisher = polisher
         self.lock = threading.RLock()
         self.fingerprint = None
         self._package_name = None
@@ -178,7 +179,11 @@ class DesktopEngine:
             text = self.strip_punc(text)
             # ResultProcessor currently runs this unconditionally, even when hot_rule=False.
             text = self.rule.substitute(text)
-            return EngineResult(text, self.version, self.source_version, self.mode, self.terms)
+            polisher = self.polisher
+            version, source_version, mode, terms = self.version, self.source_version, self.mode, self.terms
+        # Run optional local LLM polish outside the lock so status checks stay responsive.
+        if polisher: text = polisher.polish(text)
+        return EngineResult(text, version, source_version, mode, terms)
 
     def validate_hotwords(self, text, file_id='hot'):
         snapshot = read_snapshot(self.root)
@@ -192,8 +197,9 @@ class DesktopEngine:
             self.refresh()
             return dict(version=self.version, source_version=self.source_version,
                         mode=self.mode, terms=self.terms, engine='installed desktop hotword and rule source',
-                        scope='ASR output -> filler cleanup -> hotword -> punctuation (neutral app context) -> rules; no ASR/LLM',
+                        scope='ASR output -> filler cleanup -> hotword -> punctuation -> rules -> optional local LLM polish',
                         cleanup=self.cleaner.status() if self.cleaner else dict(enabled=False, file=''),
+                        polish=self.polisher.status() if self.polisher else dict(enabled=False, file=''),
                         app_context='neutral; desktop per-app punctuation settings may differ')
 
 
@@ -203,11 +209,13 @@ class DemoEngine:
     source_version = 'demo-1'
     terms = 2
     cleaner = None
+    polisher = None
 
     def correct(self, text):
         if self.cleaner: text = self.cleaner.clean(text)
         for old, new in [('卡普斯赖特', 'CapsWriter'), ('爱疯手机', 'iPhone')]:
             text = text.replace(old, new)
+        if self.polisher: text = self.polisher.polish(text)
         return EngineResult(text, self.version, self.source_version, self.mode, self.terms,
                             engine='demo exact aliases; not desktop phoneme parity')
 
