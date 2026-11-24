@@ -217,6 +217,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             if self?.navigationItem.prompt == shown { self?.navigationItem.prompt = nil }
         }
         triedSystemReturn = false
+        HostAppReturn.shared.attachKeyboardObservers()
         let token = UUID(); returnToken = token
         returnWhenSessionIsUp(reported: bundleID, requestedAt: Date(), attempts: 100, sawActive: false, token: token)
     }
@@ -250,6 +251,9 @@ final class LabViewController: UIViewController, UITextViewDelegate {
                 return
             }
         }
+        // The keyboard state object that carries the host may only appear
+        // once Lab is on screen, so keep looking for it while waiting.
+        if state == .active, attempts % 5 == 0 { HostAppReturn.shared.attachKeyboardObservers() }
         let found = HostAppReturn.shared.host(reported: reported, requestedAt: requestedAt)
         guard state == .active, voice.active, let host = found else {
             if state == .active, voice.active, !triedSystemReturn, HostAppReturn.shared.openSystemNavigationURL() {
