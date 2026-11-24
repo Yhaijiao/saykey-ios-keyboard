@@ -78,7 +78,7 @@ class VoiceTests(unittest.TestCase):
     def test_cancel_during_phone_correction_cannot_resurrect_text(self):
         entered, release = threading.Event(), threading.Event()
         class SlowEngine(DemoEngine):
-            def correct(self, text):
+            def correct(self, text, **options):
                 entered.set(); release.wait(2)
                 return super().correct(text)
         self.relay.engine = SlowEngine()
@@ -302,6 +302,110 @@ class StreamTests(unittest.TestCase):
         job = self.relay.start()
         self.assertEqual((job['received'], job['partial']), (0, ''))
         self.assertEqual(len(self.preview.sessions), 2)
+
+
+class SentencePreview:
+    """Ends an utterance every `every` bytes of audio, like a pause."""
+    def __init__(self, every): self.every, self.sessions = every, []
+    def session(self):
+        preview = self
+        class Session:
+            def __init__(self):
+                self.fed, self.utterances, self.current = 0, [], ''
+                preview.sessions.append(self)
+            def feed(self, pcm):
+                self.fed += len(pcm) // 2
+                self.current = f'说{len(self.utterances)}'
+                if self.fed * 2 % preview.every == 0:
+                    self.utterances.append((self.fed, self.current)); self.current = ''
+                return 'ignored'
+        return Session()
+
+
+class SentenceASR:
+    def __init__(self): self.calls, self.gate = [], threading.Event(); self.gate.set()
+    def available(self): return True
+    def transcribe(self, pcm, task_id):
+        self.gate.wait(5)
+        self.calls.append((task_id, len(pcm)))
+        return '整段' if task_id.count('-') == 0 else f'第{len(self.calls)}句。'
+
+
+class SentencePipelineTests(unittest.TestCase):
+    def setUp(self):
+        self.asr = SentenceASR()
+        self.relay = VoiceRelay(DemoEngine(), self.asr, preview=SentencePreview(32000))
+        self.agent = 'test-phone-agent-id'
+        self.relay.agent(self.agent)
+        self.job_id = self.relay.start()['id']
+        self.relay.ack(self.job_id, self.agent)
+
+    def chunk(self, offset, pcm):
+        return self.relay.append_chunk(self.job_id, self.agent, offset, pcm)
+
+    def wait_for(self, predicate):
+        for _ in range(200):
+            if predicate(): return
+            threading.Event().wait(.01)
+        self.fail('timed out')
+
+    def test_sentences_are_finished_while_recording_and_joined_at_stop(self):
+        second = b'\x10\x00' * 16000
+        self.chunk(0, second)
+        self.wait_for(lambda: self.relay.sentences.display('') == '第1句。')
+        partial = self.chunk(32000, second[:16000])['partial']
+        self.assertEqual(partial, '第1句。说1')
+        self.chunk(48000, second[16000:])
+        self.chunk(64000, second[:16000])  # a short tail after the last pause
+        self.relay.stop(self.job_id)
+        result = self.relay.finish_stream(self.job_id, self.agent, 80000)
+        self.assertEqual(result['state'], 'done')
+        self.assertEqual(result['text'], '第1句。第2句。第3句。')
+        ids = [task for task, _ in self.asr.calls]
+        self.assertEqual(ids, [f'{self.job_id}-s0', f'{self.job_id}-s1', f'{self.job_id}-tail'])
+        # float32 audio: each slice is twice its int16 size.
+        self.assertEqual([size for _, size in self.asr.calls], [64000, 64000, 32000])
+
+    def test_draft_shows_until_sentence_is_recognized(self):
+        self.asr.gate.clear()
+        partial = self.chunk(0, b'\x10\x00' * 16000)['partial']
+        self.assertEqual(partial, '说0')
+        self.asr.gate.set()
+
+    def test_failed_sentence_falls_back_to_whole_recording(self):
+        calls = []
+        def transcribe(pcm, task_id):
+            calls.append(task_id)
+            if task_id.endswith('-s0'): raise ConnectionError('busy')
+            return '整段'
+        self.asr.transcribe = transcribe
+        self.chunk(0, b'\x10\x00' * 16000)
+        self.relay.stop(self.job_id)
+        result = self.relay.finish_stream(self.job_id, self.agent, 32000)
+        self.assertEqual(result['text'], '整段')
+        self.assertEqual(calls[-1], self.job_id)
+
+    def test_cancel_abandons_pipeline(self):
+        self.chunk(0, b'\x10\x00' * 16000)
+        pipeline = self.relay.sentences
+        self.relay.cancel(self.job_id)
+        self.relay.result(self.job_id)
+        self.assertIsNone(self.relay.sentences)
+        self.assertTrue(pipeline.finishing)
+
+    def test_switch_off_keeps_old_behavior(self):
+        relay = VoiceRelay(DemoEngine(), self.asr, preview=SentencePreview(32000), sentences=False)
+        relay.agent(self.agent)
+        job_id = relay.start()['id']; relay.ack(job_id, self.agent)
+        self.assertIsNone(relay.sentences)
+
+
+class JoinTextTests(unittest.TestCase):
+    def test_join(self):
+        from sentences import join_text
+        self.assertEqual(join_text(['你好。', '', '再见。']), '你好。再见。')
+        self.assertEqual(join_text(['Hello.', 'World']), 'Hello. World')
+        self.assertEqual(join_text(['我说', 'OK']), '我说OK')
 
 
 class VoiceHTTPTests(unittest.TestCase):

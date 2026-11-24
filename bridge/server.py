@@ -206,6 +206,8 @@ def main():
     parser.add_argument('--polish-file', type=Path, default=Path(__file__).resolve().parent / POLISH_FILE,
                         help='Optional local Ollama polish settings; created with defaults when missing')
     parser.add_argument('--no-polish', action='store_true', help='Disable local Ollama speech polishing')
+    parser.add_argument('--no-sentences', action='store_true',
+                        help='Do not recognize and polish each sentence while recording (needs --stream-model)')
     parser.add_argument('--enable-hotword-save', action='store_true', help='Explicitly allow saving desktop hot.txt, personal aliases and rules')
     args = parser.parse_args()
     if bool(args.desktop) == bool(args.demo): parser.error('Choose exactly one of --desktop or --demo')
@@ -230,7 +232,8 @@ def main():
         if not args.asr_port: parser.error('--stream-model needs --asr-port')
         from stream import load
         preview = load(args.stream_model)
-    voice = VoiceRelay(engine, DesktopASR(args.asr_port), preview=preview) if args.asr_port else None
+    voice = VoiceRelay(engine, DesktopASR(args.asr_port), preview=preview,
+                       sentences=not args.no_sentences) if args.asr_port else None
     if args.enable_hotword_save and (not args.desktop or not args.hotwords_state):
         parser.error('Hotword saving needs a desktop source and explicit private state directory')
     hotwords = HotwordStore(args.desktop, args.hotwords_state, writable=args.enable_hotword_save,
@@ -244,6 +247,8 @@ def main():
     if engine.polisher: print(f'Local LLM polish config: {args.polish_file}', flush=True)
     print('Voice: existing local desktop ASR.' if voice else 'Voice disabled (text tests only).', flush=True)
     if preview: print('Live preview: streaming draft text while recording.', flush=True)
+    if preview and not args.no_sentences:
+        print('Sentences: each pause is recognized and polished while recording.', flush=True)
     print('The bridge saves no audio or text. Desktop ASR may use its normal logs. Ctrl+C stops.', flush=True)
     try: server.serve_forever(poll_interval=.5)
     except KeyboardInterrupt: pass

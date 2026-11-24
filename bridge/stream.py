@@ -45,6 +45,12 @@ class PreviewSession:
         self.stream = recognizer.create_stream()
         self.committed = ''
         self.lock = threading.Lock()
+        # Samples fed so far, and one (end sample, draft text) per finished
+        # utterance. The relay cuts the audio at these pauses so each
+        # sentence can be recognized and polished while the next is spoken.
+        self.fed = 0
+        self.current = ''
+        self.utterances = []
 
     def feed(self, pcm_s16):
         """Feed int16 little-endian mono 16 kHz bytes; return the draft so far."""
@@ -53,6 +59,7 @@ class PreviewSession:
         with self.lock:
             if len(samples):
                 self.stream.accept_waveform(RATE, samples)
+                self.fed += len(samples)
             while self.recognizer.is_ready(self.stream):
                 self.recognizer.decode_stream(self.stream)
             current = self.recognizer.get_result(self.stream).strip()
@@ -60,8 +67,11 @@ class PreviewSession:
                 # Each pause ends an utterance; keep its text and start fresh so
                 # a five-minute recording never grows one huge stream.
                 self.committed = _join(self.committed, current)
+                if current:
+                    self.utterances.append((self.fed, current))
                 current = ''
                 self.recognizer.reset(self.stream)
+            self.current = current
             return _join(self.committed, current)[-MAX_PREVIEW_CHARS:]
 
 

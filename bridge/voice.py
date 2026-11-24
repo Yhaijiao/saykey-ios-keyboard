@@ -11,6 +11,8 @@ import sys
 import threading
 import time
 
+from sentences import SentencePipeline, join_text, MIN_SEGMENT_BYTES
+
 RATE = 16000
 MAX_SECONDS = 300
 MAX_AUDIO = RATE * MAX_SECONDS * 4
@@ -22,6 +24,9 @@ AGENT_WINDOW = 8
 # Upload time for a whole segment once the phone has started sending it.
 RECEIVE_SECONDS = 200
 ACTIVE_STATES = ('pending', 'recording', 'stopping', 'receiving', 'processing')
+# How long stop waits for sentences still being recognized before it falls
+# back to recognizing the whole recording at once.
+SENTENCE_WAIT = 30
 # One live chunk may carry up to 10 s, so the phone can catch up after a blip.
 MAX_CHUNK_S16 = RATE * 2 * 10
 
@@ -83,9 +88,12 @@ class DesktopASR:
 
 
 class VoiceRelay:
-    def __init__(self, engine, recognizer, clock=time.monotonic, preview=None):
+    def __init__(self, engine, recognizer, clock=time.monotonic, preview=None, sentences=True):
         self.engine, self.recognizer, self.clock = engine, recognizer, clock
         self.preview = preview
+        # Recognize and polish each sentence at its pause while recording.
+        self.use_sentences = sentences
+        self.sentences = None
         self.lock = threading.RLock()
         self.agent_id = None
         self.heartbeat = -float('inf')
@@ -111,6 +119,7 @@ class VoiceRelay:
             self.job.pop('receiving_since', None)
         if self.job['state'] not in ACTIVE_STATES:
             self.audio = bytearray(); self.preview_session = None
+            self._drop_sentences()
             if now - self.job.get('updated', self.job['created']) > 180:
                 self.job = None
 
@@ -172,7 +181,34 @@ class VoiceRelay:
                             max_seconds=MAX_SECONDS, partial='', received=0)
             self.audio = bytearray()
             self.preview_session = self.preview.session() if self.preview else None
+            self._drop_sentences()
+            if self.preview_session is not None and self.use_sentences:
+                self.sentences = self._new_sentences(self.job['id'])
             return self._public()
+
+    def _new_sentences(self, job_id):
+        def recognize(pcm, index):
+            return self.recognizer.transcribe(s16_to_f32(pcm), f'{job_id}-s{index}')
+        def polish(raw):
+            return self.engine.correct(raw).text
+        return SentencePipeline(recognize, polish)
+
+    def _drop_sentences(self):
+        if self.sentences is not None:
+            self.sentences.abandon()
+            self.sentences = None
+
+    def _queue_sentences(self, session):
+        """Hand each newly finished utterance's audio to the pipeline.
+        Called under the lock, after the preview has seen the audio."""
+        pipeline = self.sentences
+        if pipeline is None or session is None:
+            return
+        for end_sample, draft in list(getattr(session, 'utterances', ()))[pipeline.count:]:
+            start, end = pipeline.end, min(end_sample * 2, len(self.audio))
+            if end <= start:
+                continue
+            pipeline.add(end, bytes(self.audio[start:end]), draft)
 
     def ack(self, job_id, agent_id):
         with self.lock:
@@ -228,6 +264,7 @@ class VoiceRelay:
                     raise ValueError('Invalid audio samples')
             except (ValueError, TypeError):
                 raise VoiceError(400, '录音不足 0.2 秒或音频格式无效。') from None
+            self._drop_sentences()
             self._set_state('processing')
         return self._recognize(job_id, pcm)
 
@@ -265,6 +302,7 @@ class VoiceRelay:
                 self._set_state('stopping'); self.job.pop('receiving_since', None)
                 raise VoiceError(400, '录音不足 0.2 秒或音频格式无效。')
             self._set_state('processing'); self.job.pop('receiving_since', None)
+            self._drop_sentences()
         return self._recognize(job_id, s16_to_f32(pcm))
 
     def append_chunk(self, job_id, agent_id, offset, pcm):
@@ -293,6 +331,10 @@ class VoiceRelay:
             with self.lock:
                 if (partial is not None and self.preview_session is session and self.job
                         and self.job['id'] == job_id and self.job['state'] in ('recording', 'stopping')):
+                    self._queue_sentences(session)
+                    live = getattr(session, 'current', None)
+                    if self.sentences is not None and self.sentences.count and live is not None:
+                        partial = self.sentences.display(live)
                     self.job['partial'] = partial
         with self.lock:
             self._job(job_id)
@@ -310,18 +352,40 @@ class VoiceRelay:
             if not RATE * 2 // 5 <= total <= MAX_AUDIO_S16:
                 raise VoiceError(400, '录音不足 0.2 秒或超过 5 分钟。')
             pcm = bytes(self.audio)
+            sentences, self.sentences = self.sentences, None
             self.audio = bytearray(); self.preview_session = None
             self._set_state('processing')
+        if sentences is not None:
+            raw = self._raw_from_sentences(job_id, pcm, sentences)
+            if raw:
+                return self._recognize(job_id, None, raw=raw)
         return self._recognize(job_id, s16_to_f32(pcm))
+
+    def _raw_from_sentences(self, job_id, pcm, sentences):
+        """Sentences already recognized while recording, plus the last one.
+        None means use the whole recording instead."""
+        raws = sentences.finish(SENTENCE_WAIT)
+        if raws is None:
+            return None
+        tail = pcm[sentences.end:]
+        try:
+            if len(tail) >= MIN_SEGMENT_BYTES:
+                raws.append(self.recognizer.transcribe(s16_to_f32(tail), f'{job_id}-tail'))
+        except Exception:
+            return None
+        return join_text(raws)
 
     def _set_state(self, state):
         self.job['state'] = state
         self.job['updated'] = self.clock()
 
-    def _recognize(self, job_id, pcm):
+    def _recognize(self, job_id, pcm, raw=None):
         try:
-            raw = self.recognizer.transcribe(pcm, job_id)
-            corrected = asdict(self.engine.correct(raw))
+            if raw is None:
+                raw = self.recognizer.transcribe(pcm, job_id)
+            # The finished text gets one pass as a whole paragraph.
+            final = getattr(self.engine, 'correct_final', self.engine.correct)
+            corrected = asdict(final(raw))
             with self.lock:
                 self._job(job_id)
                 if self.job['state'] == 'processing':
@@ -349,8 +413,9 @@ class VoiceRelay:
             if not isinstance(text, str) or not text.strip() or len(text) > 20000:
                 raise VoiceError(400, '本地识别没有有效文字，或文字过长，请重新录音。')
             self._set_state('processing')
+            self._drop_sentences()
         try:
-            corrected = asdict(self.engine.correct(text))
+            corrected = asdict(getattr(self.engine, 'correct_final', self.engine.correct)(text))
             with self.lock:
                 self._job(job_id)
                 if self.job['state'] == 'processing':

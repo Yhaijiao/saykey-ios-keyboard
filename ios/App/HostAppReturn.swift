@@ -52,6 +52,14 @@ final class HostAppReturn: NSObject {
         "com.laiwang.DingTalk": "dingtalk://"
     ]
 
+    /// Hosts that are a shared shell for Home Screen web apps or web views.
+    /// Reopening them by bundle ID cannot bring back the right web app.
+    static func isWebAppShell(_ bundleID: String) -> Bool {
+        let lower = bundleID.lowercased()
+        return lower.hasPrefix("com.apple.webapp") || lower.contains("websheet")
+            || lower.contains("safariviewservice") || lower.hasPrefix("com.apple.webkit")
+    }
+
     static func isOwn(_ bundleID: String) -> Bool {
         HostBundleID.isOwnOrSystemOverlay(bundleID)
     }
