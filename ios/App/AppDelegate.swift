@@ -266,7 +266,12 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             }
             if attempts == 75 || attempts == 1 {
                 let diag = HostAppReturn.shared.diagnosticSummary(reported: reported, probe: keyboardProbe)
-                let source = found.map { "检测到来源：\(HostAppReturn.displayName($0))，正在尝试返回" } ?? "未认出来源 \(diag)"
+                var source = found.map { "检测到来源：\(HostAppReturn.displayName($0))，正在尝试返回" } ?? "未认出来源 \(diag)"
+                if found == nil, attempts == 1 {
+                    // Let the user paste the keyboard state layout back to us.
+                    UIPasteboard.general.string = HostAppReturn.shared.stateDumpText
+                    source += " · 诊断已复制，可粘贴发给 Claude"
+                }
                 navigationItem.prompt = voice.active
                     ? "已续上 · \(source) · 点左上角◀返回"
                     : "语音会话还没开启 · \(source)"

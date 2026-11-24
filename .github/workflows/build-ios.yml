@@ -158,11 +158,11 @@ jobs:
           done
           codesign --verify --deep --strict "$APP"
           cd artifacts
-          zip -qr CapsWriterLab-0.4.36-sideload.ipa Payload
-          shasum -a 256 CapsWriterLab-0.4.36-sideload.ipa > SHA256SUMS.txt
+          zip -qr CapsWriterLab-0.4.37-sideload.ipa Payload
+          shasum -a 256 CapsWriterLab-0.4.37-sideload.ipa > SHA256SUMS.txt
           rm -r Payload
       - name: Verify package
-        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.4.36-sideload.ipa 0.4.36
+        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.4.37-sideload.ipa 0.4.37
       - name: Upload install package before simulator tests
         uses: actions/upload-artifact@v4
         with:
