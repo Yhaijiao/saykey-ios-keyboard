@@ -16,6 +16,7 @@ from urllib.parse import urlsplit, parse_qs
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cleanup import Cleaner, FILE_NAME as CLEANUP_FILE
+from polish import Polisher, FILE_NAME as POLISH_FILE
 from engine import DemoEngine, DesktopEngine
 from voice import VoiceRelay, DesktopASR, VoiceError, MAX_AUDIO, MAX_AUDIO_S16, MAX_CHUNK_S16
 from hotwords import HotwordStore, HotwordError, MAX_HOT_BYTES
@@ -202,6 +203,9 @@ def main():
     parser.add_argument('--cleanup-file', type=Path, default=Path(__file__).resolve().parent / CLEANUP_FILE,
                         help='Filler and repeat cleanup rules; created with defaults when missing')
     parser.add_argument('--no-cleanup', action='store_true', help='Do not remove filler words or stuttered repeats')
+    parser.add_argument('--polish-file', type=Path, default=Path(__file__).resolve().parent / POLISH_FILE,
+                        help='Optional local Ollama polish settings; created with defaults when missing')
+    parser.add_argument('--no-polish', action='store_true', help='Disable local Ollama speech polishing')
     parser.add_argument('--enable-hotword-save', action='store_true', help='Explicitly allow saving desktop hot.txt, personal aliases and rules')
     args = parser.parse_args()
     if bool(args.desktop) == bool(args.demo): parser.error('Choose exactly one of --desktop or --demo')
@@ -211,6 +215,8 @@ def main():
     engine = DemoEngine() if args.demo else DesktopEngine(args.desktop)
     if not args.no_cleanup:
         engine.cleaner = Cleaner(args.cleanup_file, create=True)
+    if not args.no_polish and not args.demo:
+        engine.polisher = Polisher(args.polish_file, create=True)
     token = secrets.token_urlsafe(24)
     if args.token_file:
         if args.token_file.exists():
@@ -235,6 +241,7 @@ def main():
     print(f'Pairing token (keep local): {token}', flush=True)
     print(json.dumps(engine.status(), ensure_ascii=False), flush=True)
     if engine.cleaner: print(f'Speech cleanup rules: {args.cleanup_file}', flush=True)
+    if engine.polisher: print(f'Local LLM polish config: {args.polish_file}', flush=True)
     print('Voice: existing local desktop ASR.' if voice else 'Voice disabled (text tests only).', flush=True)
     if preview: print('Live preview: streaming draft text while recording.', flush=True)
     print('The bridge saves no audio or text. Desktop ASR may use its normal logs. Ctrl+C stops.', flush=True)

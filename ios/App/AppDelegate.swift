@@ -21,7 +21,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
               let controller = navigation.viewControllers.first as? LabViewController else { return false }
         switch url.host {
         case "pair": controller.offerPairing(url); return true
-        case "renew": controller.renewFromKeyboard(returnTo: VoiceSessionRenewal.returnBundleID(from: url)); return true
+        case "renew":
+            let reported = VoiceSessionRenewal.returnBundleID(from: url)
+                ?? (options[.sourceApplication] as? String)
+            controller.renewFromKeyboard(returnTo: reported)
+            return true
         default: return false
         }
     }
@@ -209,30 +213,40 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             if self?.navigationItem.prompt == shown { self?.navigationItem.prompt = nil }
         }
         triedSystemReturn = false
-        returnWhenSessionIsUp(reported: bundleID, requestedAt: Date(), attempts: 100)
+        let token = UUID(); returnToken = token
+        returnWhenSessionIsUp(reported: bundleID, requestedAt: Date(), attempts: 100, sawActive: false, token: token)
     }
 
     private var triedSystemReturn = false
+    private var returnToken = UUID()
     /// Once the microphone is on, go back to the app the keyboard was in.
     /// Lab is still coming to the foreground when the keyboard opens it, and
     /// the host may be learned a moment later, so keep trying until then.
-    private func returnWhenSessionIsUp(reported: String?, requestedAt: Date, attempts: Int) {
-        guard attempts > 0, UIApplication.shared.applicationState != .background else { return }
+    private func returnWhenSessionIsUp(reported: String?, requestedAt: Date, attempts: Int,
+                                       sawActive: Bool, token: UUID) {
+        guard token == returnToken, attempts > 0 else { return }
+        let state = UIApplication.shared.applicationState
+        // Only stop on `.background` after Lab has actually reached the
+        // foreground once; right inside `application(_:open:)` the state can
+        // still be `.background` while iOS is waking Lab up.
+        if sawActive && state == .background { return }
+        let nowActive = sawActive || state == .active
         // First choice: the system's own "◀" action. It returns to the app
         // the user came from without Lab having to work out which one that
         // was. If Lab is still in front shortly after, it did not work here
         // and the bundle ID route below takes over.
-        if !triedSystemReturn, UIApplication.shared.applicationState == .active, voice.active {
+        if !triedSystemReturn, state == .active, voice.active {
             triedSystemReturn = true
             if HostAppReturn.shared.goBackViaSystem() {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                    self?.returnWhenSessionIsUp(reported: reported, requestedAt: requestedAt, attempts: attempts - 1)
+                    self?.returnWhenSessionIsUp(reported: reported, requestedAt: requestedAt,
+                                                attempts: attempts - 1, sawActive: nowActive, token: token)
                 }
                 return
             }
         }
         let found = HostAppReturn.shared.host(reported: reported, requestedAt: requestedAt)
-        guard UIApplication.shared.applicationState == .active, voice.active, let host = found else {
+        guard state == .active, voice.active, let host = found else {
             if attempts == 1 {
                 let source = found.map { "检测到来源：\(HostAppReturn.displayName($0))，但未能自动返回" } ?? "没确认这次的来源 App"
                 navigationItem.prompt = voice.active
@@ -240,7 +254,8 @@ final class LabViewController: UIViewController, UITextViewDelegate {
                     : "语音会话还没开启 · \(source)"
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.returnWhenSessionIsUp(reported: reported, requestedAt: requestedAt, attempts: attempts - 1)
+                self?.returnWhenSessionIsUp(reported: reported, requestedAt: requestedAt,
+                                            attempts: attempts - 1, sawActive: nowActive, token: token)
             }
             return
         }

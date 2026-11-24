@@ -87,12 +87,47 @@ final class HostAppReturn: NSObject {
     /// the host of an earlier visit when it wakes up, so the choice is left
     /// to `HostReturnPolicy`; call again until it answers or time runs out.
     func host(reported: String?, requestedAt: Date) -> String? {
-        let reported = reported.flatMap { Self.isOwn($0) ? nil : $0 }
+        let reported = reported.flatMap { Self.isOwn($0) ? nil : $0 } ?? systemNavigationBundleID()
         let current = Self.source(of: observed?.value(forKey: "currentState") as? NSObject)
         let decision = HostReturnPolicy.decide(reported: reported, current: current, observed: lastHost,
                                                requestedAt: requestedAt, backgroundedAt: backgroundedAt, now: Date())
         guard case .open(let id) = decision else { return nil }
         return id
+    }
+
+    /// Finds every active `UISystemNavigationAction` (the status bar "◀"
+    /// action) together with its first destination index.
+    private func systemNavigationActions() -> [(action: NSObject, destination: UInt)] {
+        let getter = NSSelectorFromString("_systemNavigationAction")
+        let destinationsSel = NSSelectorFromString("destinations")
+        let owners: [NSObject] = [UIApplication.shared] + UIApplication.shared.connectedScenes.map { $0 as NSObject }
+        var found: [(NSObject, UInt)] = []
+        for owner in owners where owner.responds(to: getter) {
+            guard let action = owner.perform(getter)?.takeUnretainedValue() as? NSObject else { continue }
+            var destination: UInt = 0
+            if action.responds(to: destinationsSel),
+               let list = action.perform(destinationsSel)?.takeUnretainedValue() as? [NSNumber] {
+                guard let first = list.first else { continue }
+                destination = first.uintValue
+            }
+            found.append((action, destination))
+        }
+        return found
+    }
+
+    /// Bundle ID of the app behind the status bar "◀" breadcrumb for this
+    /// launch, when iOS exposes it on `_systemNavigationAction`.
+    private func systemNavigationBundleID() -> String? {
+        let selector = NSSelectorFromString("bundleIdForDestination:")
+        for (action, destination) in systemNavigationActions() {
+            guard action.responds(to: selector), let method = action.method(for: selector) else { continue }
+            typealias BundleID = @convention(c) (AnyObject, Selector, UInt) -> Unmanaged<NSString>?
+            if let raw = unsafeBitCast(method, to: BundleID.self)(action, selector, destination)?.takeUnretainedValue() as String?,
+               !raw.isEmpty, !Self.isOwn(raw) {
+                return raw
+            }
+        }
+        return nil
     }
 
     /// Triggers the system's own "◀ back to the previous app" action, the
@@ -101,18 +136,15 @@ final class HostAppReturn: NSObject {
     /// so every step is checked at runtime; false means it was not sent
     /// and the caller should use another route.
     func goBackViaSystem() -> Bool {
-        let getter = NSSelectorFromString("_systemNavigationAction")
         let send = NSSelectorFromString("sendResponseForDestination:")
         let canSend = NSSelectorFromString("canSendResponse")
-        let owners: [NSObject] = [UIApplication.shared] + UIApplication.shared.connectedScenes.map { $0 as NSObject }
-        for owner in owners where owner.responds(to: getter) {
-            guard let action = owner.perform(getter)?.takeUnretainedValue() as? NSObject,
-                  action.responds(to: send), let method = action.method(for: send) else { continue }
+        for (action, destination) in systemNavigationActions() {
+            guard action.responds(to: send), let method = action.method(for: send) else { continue }
             if action.responds(to: canSend), (action.value(forKey: "canSendResponse") as? Bool) == false { continue }
-            typealias Send = @convention(c) (AnyObject, Selector, UInt) -> Void
-            // Destination 0 is the app that opened this one.
-            unsafeBitCast(method, to: Send.self)(action, send, 0)
-            return true
+            typealias Send = @convention(c) (AnyObject, Selector, UInt) -> ObjCBool
+            if unsafeBitCast(method, to: Send.self)(action, send, destination).boolValue {
+                return true
+            }
         }
         return false
     }
