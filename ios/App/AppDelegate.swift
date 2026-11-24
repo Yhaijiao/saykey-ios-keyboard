@@ -247,10 +247,10 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         }
         let found = HostAppReturn.shared.host(reported: reported, requestedAt: requestedAt)
         guard state == .active, voice.active, let host = found else {
-            if attempts == 1 {
-                let source = found.map { "检测到来源：\(HostAppReturn.displayName($0))，但未能自动返回" } ?? "没确认这次的来源 App"
+            if attempts == 75 || attempts == 1 {
+                let source = found.map { "检测到来源：\(HostAppReturn.displayName($0))，正在尝试返回" } ?? "没确认这次的来源 App"
                 navigationItem.prompt = voice.active
-                    ? "语音会话已续上 · \(source) · 请点左上角「◀」返回"
+                    ? "语音会话已续上 · \(source) · 也可点左上角「◀」返回"
                     : "语音会话还没开启 · \(source)"
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
@@ -259,8 +259,14 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             }
             return
         }
-        if !HostAppReturn.shared.open(host) && !Self.openApplication(host) {
-            navigationItem.prompt = "语音会话已续上 · 检测到来源：\(HostAppReturn.displayName(host))，此 App 暂不支持自动返回 · 请点左上角「◀」"
+        let showFallbackHint: () -> Void = { [weak self] in
+            self?.navigationItem.prompt = "语音会话已续上 · 检测到来源：\(HostAppReturn.displayName(host))，此 App 暂不支持自动返回 · 请点左上角「◀」"
+        }
+        let openedByScheme = HostAppReturn.shared.open(host) {
+            if !Self.openApplication(host) { showFallbackHint() }
+        }
+        if !openedByScheme && !Self.openApplication(host) {
+            showFallbackHint()
         }
     }
 

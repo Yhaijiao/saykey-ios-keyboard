@@ -42,9 +42,13 @@ enum HostReturnPolicy {
         guard now.timeIntervalSince(requestedAt) >= settleTime else { return .wait }
         // An old value is still right when Lab kept receiving events in the
         // background (voice session running): it then names the last app the
-        // keyboard appeared in. A value from the previous visit is not.
+        // keyboard appeared in.
         if let observed, let backgroundedAt,
            observed.at > backgroundedAt.addingTimeInterval(backgroundTail) { return .open(observed.id) }
+        // After waiting `settleTime` for any new host event, if the system's
+        // live keyboard state still reports a host (e.g. returning to the same
+        // app such as Notes/WeChat again after Lab was suspended), use it.
+        if let current { return .open(current) }
         return .unknown
     }
 }

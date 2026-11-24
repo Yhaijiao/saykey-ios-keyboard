@@ -15,10 +15,13 @@ final class HostReturnPolicyTests: XCTestCase {
         XCTAssertEqual(decide(reported: "app.muse", current: "app.grok", observed: ("app.grok", -600)), .open("app.muse"))
     }
 
-    func testStaleHostFromEarlierVisitIsNotUsed() {
-        // Lab was last in front for Grok ten minutes ago and then suspended.
-        XCTAssertEqual(decide(current: "app.grok", observed: ("app.grok", -600), backgrounded: -600.5), .wait)
-        XCTAssertEqual(decide(current: "app.grok", observed: ("app.grok", -600), backgrounded: -600.5, after: 1), .unknown)
+    func testSameHostAfterSuspensionWaitsThenReturnsCurrent() {
+        // Lab was last in front for Notes ten minutes ago and then suspended.
+        // Wait briefly for any newer event, then trust the live current state.
+        XCTAssertEqual(decide(current: "app.notes", observed: ("app.notes", -600), backgrounded: -600.5), .wait)
+        XCTAssertEqual(decide(current: "app.notes", observed: ("app.notes", -600), backgrounded: -600.5, after: 1), .open("app.notes"))
+        // If current state is empty, do not fall back to an ancient observed host.
+        XCTAssertEqual(decide(current: nil, observed: ("app.grok", -600), backgrounded: -600.5, after: 1), .unknown)
     }
 
     func testFreshEventForThisVisitIsUsedAtOnce() {
