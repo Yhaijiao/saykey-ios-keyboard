@@ -46,9 +46,44 @@ final class HostArbiterWatch: NSObject {
         lock.unlock()
     }
 
+    private var harvests = 0
+    private var harvestedStates = 0
+
+    /// The arbiter client the swizzle turns on. Its `currentClientState`
+    /// names the app the keyboard is shown in together with that app's
+    /// process; it fills about 200 ms after the keyboard appears and is
+    /// polled (there is no event for it).
+    private static func arbiterClient() -> NSObject? {
+        for name in ["_UIKeyboardArbiterClient", "UIKeyboardArbiterClient"] {
+            guard let cls = NSClassFromString(name) else { continue }
+            let selector = NSSelectorFromString("automaticSharedArbiterClient")
+            guard let method = class_getClassMethod(cls, selector), method_getNumberOfArguments(method) == 2 else { continue }
+            let type = cls as AnyObject
+            if let client = type.perform(selector)?.takeUnretainedValue() as? NSObject { return client }
+        }
+        return nil
+    }
+
+    /// Reads the arbiter client's state once and records its app and process.
+    func harvest() {
+        guard let client = Self.arbiterClient() else { return }
+        let state = HostAppProbe.getObject(client, "currentClientState") ?? Self.objectIvar(client, "_currentClientState")
+        let id = state.flatMap { Self.bundleID(of: $0) }
+        let pid = state.flatMap { Self.processID(of: $0) }
+        lock.lock()
+        harvests += 1
+        if state != nil { harvestedStates += 1 }
+        if let id {
+            latest = (id, Date())
+            if let pid, pid > 0, table.count < 128 { table[pid] = id }
+        }
+        lock.unlock()
+    }
+
     /// The host for this tap: by host process ID when the table knows it,
     /// else the newest event if it arrived during this keyboard appearance.
     func host(for controller: UIInputViewController, appearedAt: Date?) -> (id: String, code: String)? {
+        harvest()
         let pids = Self.hostPIDs(of: controller)
         lock.lock(); defer { lock.unlock() }
         for pid in pids { if let id = table[pid] { return (id, "a") } }
@@ -61,7 +96,7 @@ final class HostArbiterWatch: NSObject {
     /// Privacy-free counters for the diagnostic line.
     var summary: String {
         lock.lock(); defer { lock.unlock() }
-        return "A\(events)n\(table.count)"
+        return "A\(events)n\(table.count)h\(harvests)s\(harvestedStates)"
     }
 
     // MARK: - Field readers
@@ -110,6 +145,12 @@ final class HostArbiterWatch: NSObject {
             }
         }
         return result
+    }
+
+    private static func objectIvar(_ object: NSObject, _ name: String) -> NSObject? {
+        guard let ivar = class_getInstanceVariable(type(of: object), name),
+              let rawType = ivar_getTypeEncoding(ivar), String(cString: rawType).hasPrefix("@") else { return nil }
+        return object_getIvar(object, ivar) as? NSObject
     }
 
     private static func stringIvar(_ object: NSObject, _ name: String) -> String? {

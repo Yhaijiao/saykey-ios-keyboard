@@ -141,6 +141,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         appeared = false
+        hostHarvestTimer?.invalidate(); hostHarvestTimer = nil
         stopVoiceReadiness()
         cancelIntentWarmup()
         removeVoiceIntentControl()
@@ -170,6 +171,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         super.viewDidAppear(animated)
         appeared = true
         keyboardAppearedAt = Date()
+        startHostHarvest()
         voiceAgentReady = nil
         if hasFullAccess { BridgePairingStore.markKeyboardReady() }
         refreshBridgePairing()
@@ -205,8 +207,22 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         ])
         render()
     }
+    /// The system names the host app only for a moment after the keyboard
+    /// appears, so read it shortly after appearing and then once a second.
+    private var hostHarvestTimer: Timer?
+    private func startHostHarvest() {
+        HostArbiterWatch.shared.harvest()
+        for delay in [0.2, 0.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { HostArbiterWatch.shared.harvest() }
+        }
+        hostHarvestTimer?.invalidate()
+        hostHarvestTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            HostArbiterWatch.shared.harvest()
+        }
+    }
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
+        HostArbiterWatch.shared.harvest()
         dropSpellingIfHostMoved()
         // The cursor moved or the host changed the text: suggest for the new place.
         scheduleSuggestions()

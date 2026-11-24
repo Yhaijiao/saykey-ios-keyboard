@@ -226,6 +226,17 @@ final class HostAppReturn: NSObject {
         for keyboards in observedKeyboards {
             if let id = Self.source(of: Self.object(keyboards, "currentState")) { return id }
         }
+        return Self.source(of: Self.arbiterClientState())
+    }
+
+    /// `currentClientState` of the keyboard arbiter client (polled; it has
+    /// no change event).
+    private static func arbiterClientState() -> NSObject? {
+        for name in ["_UIKeyboardArbiterClient", "UIKeyboardArbiterClient"] {
+            guard let cls = NSClassFromString(name),
+                  let client = classObject(cls, "automaticSharedArbiterClient") else { continue }
+            return object(client, "currentClientState")
+        }
         return nil
     }
 
@@ -256,7 +267,9 @@ final class HostAppReturn: NSObject {
     /// and short values), so the user can paste it back when the host is
     /// still not found on a new iOS version.
     var stateDumpText: String {
-        "SayKey kb-state \(UIDevice.current.systemVersion) ev:\(events)\n" + stateDumps.joined(separator: "\n---\n")
+        let client = Self.arbiterClientState().map { Self.dump($0, depth: 0) } ?? "nil"
+        return "SayKey kb-state \(UIDevice.current.systemVersion) ev:\(events)\nclient: \(client)\n"
+            + stateDumps.joined(separator: "\n---\n")
     }
 
     /// nil when the class has no weak ivars; otherwise the ivars proven
