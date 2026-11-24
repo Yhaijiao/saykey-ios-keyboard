@@ -46,6 +46,21 @@ class PolishTests(unittest.TestCase):
         self.assertNotIn('方案', logs.getvalue())
         self.assertNotIn('WARNING', logs.getvalue())
 
+    def test_paragraph_pass_gets_split_hint_and_longer_timeout(self):
+        seen = []
+        def transport(url, payload, timeout):
+            seen.append((payload['system'], timeout))
+            return {'response': payload['prompt']}
+        polisher = Polisher(transport=transport, log_stream=io.StringIO())
+        long_text = '今天我们讨论一下项目进度' * 20
+        polisher.polish(long_text, paragraph=True)
+        polisher.polish('我觉得这个方案还可以明天开始测试吧', paragraph=True)
+        polisher.polish(long_text)
+        (long_system, long_timeout), (short_system, short_timeout), (plain_system, plain_timeout) = seen
+        self.assertIn('分段', long_system); self.assertGreater(long_timeout, 4.0)
+        self.assertNotIn('分段', short_system); self.assertEqual(short_timeout, 4.0)
+        self.assertNotIn('分段', plain_system); self.assertEqual(plain_timeout, 4.0)
+
     def test_short_utterances_skip_llm(self):
         called = False
 

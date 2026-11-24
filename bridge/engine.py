@@ -169,7 +169,11 @@ class DesktopEngine:
             if key == name or key.startswith(name + '.'):
                 sys.modules.pop(key, None)
 
-    def correct(self, text):
+    def correct_final(self, text):
+        """The whole finished recording: also lets the LLM split paragraphs."""
+        return self.correct(text, paragraph=True)
+
+    def correct(self, text, paragraph=False):
         with self.lock:
             self.refresh()
             # Drop fillers and stutters first so hotwords and punctuation see clean text.
@@ -182,7 +186,7 @@ class DesktopEngine:
             polisher = self.polisher
             version, source_version, mode, terms = self.version, self.source_version, self.mode, self.terms
         # Run optional local LLM polish outside the lock so status checks stay responsive.
-        if polisher: text = polisher.polish(text)
+        if polisher: text = polisher.polish(text, paragraph=paragraph)
         return EngineResult(text, version, source_version, mode, terms)
 
     def validate_hotwords(self, text, file_id='hot'):
@@ -211,11 +215,14 @@ class DemoEngine:
     cleaner = None
     polisher = None
 
-    def correct(self, text):
+    def correct_final(self, text):
+        return self.correct(text, paragraph=True)
+
+    def correct(self, text, paragraph=False):
         if self.cleaner: text = self.cleaner.clean(text)
         for old, new in [('卡普斯赖特', 'CapsWriter'), ('爱疯手机', 'iPhone')]:
             text = text.replace(old, new)
-        if self.polisher: text = self.polisher.polish(text)
+        if self.polisher: text = self.polisher.polish(text, paragraph=paragraph)
         return EngineResult(text, self.version, self.source_version, self.mode, self.terms,
                             engine='demo exact aliases; not desktop phoneme parity')
 

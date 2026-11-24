@@ -69,6 +69,17 @@ SYSTEM_PROMPT = (
     '不要解释，直接输出润色后的文字。'
 )
 
+# Added for the final pass over a whole recording when it is long enough to
+# have more than one topic.
+PARAGRAPH_PROMPT = (
+    '这是一整段说完的话。如果内容较长且明显换了话题，可以在换话题处分段，'
+    '段与段之间只用一个换行；内容短或只有一个话题就不要分段。'
+)
+PARAGRAPH_MIN_CHARS = 150
+# A long paragraph needs more generation time than one sentence.
+PARAGRAPH_SEC_PER_CHAR = 0.03
+PARAGRAPH_MAX_TIMEOUT = 20.0
+
 _THINK_RE = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
 _TOKEN_RE = re.compile(r'[+\-]?\d+(?:\.\d+)*|[A-Za-z][A-Za-z0-9._+-]*')
 
@@ -216,7 +227,7 @@ class Polisher:
         except Exception:
             pass
 
-    def polish(self, text):
+    def polish(self, text, paragraph=False):
         if not text or not text.strip():
             return text
         with self.lock:
@@ -228,9 +239,14 @@ class Polisher:
             if now < self._cooldown_until:
                 return text
 
+        system, timeout = SYSTEM_PROMPT, cfg.timeout
+        if paragraph:
+            timeout = min(PARAGRAPH_MAX_TIMEOUT, max(cfg.timeout, len(text) * PARAGRAPH_SEC_PER_CHAR))
+            if len(text.strip()) >= PARAGRAPH_MIN_CHARS:
+                system = SYSTEM_PROMPT + PARAGRAPH_PROMPT
         payload = {
             'model': cfg.model,
-            'system': SYSTEM_PROMPT,
+            'system': system,
             'prompt': text,
             'stream': False,
             'keep_alive': cfg.keep_alive,
@@ -239,7 +255,7 @@ class Polisher:
         }
         started = self.clock()
         try:
-            reply = self.transport(cfg.endpoint + '/api/generate', payload, cfg.timeout)
+            reply = self.transport(cfg.endpoint + '/api/generate', payload, timeout)
         except (URLError, TimeoutError, OSError, ValueError, KeyError) as error:
             elapsed = self.clock() - started
             cooldown = 10.0 if isinstance(error, TimeoutError) else 30.0
