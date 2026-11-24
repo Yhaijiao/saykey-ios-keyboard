@@ -164,9 +164,12 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         }
         saveLexiconNow()
     }
+    /// When this keyboard appearance began, for judging host events.
+    private var keyboardAppearedAt: Date?
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         appeared = true
+        keyboardAppearedAt = Date()
         voiceAgentReady = nil
         if hasFullAccess { BridgePairingStore.markKeyboardReady() }
         refreshBridgePairing()
@@ -186,6 +189,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        HostArbiterWatch.shared.start()
         view.backgroundColor = Lab.background
         heightConstraint = view.heightAnchor.constraint(equalToConstant: 272)
         heightConstraint?.priority = .defaultHigh; heightConstraint?.isActive = true
@@ -713,7 +717,13 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func renewSessionInLab() {
         let defaults = UserDefaults.standard
         defaults.set(Date().timeIntervalSince1970, forKey: VoiceSessionRenewal.pendingKey)
-        let probe = HostAppProbe.run(controller: self)
+        var probe: HostAppProbe.Result
+        if let found = HostArbiterWatch.shared.host(for: self, appearedAt: keyboardAppearedAt) {
+            probe = HostAppProbe.Result(bundleID: found.id, code: found.code)
+        } else {
+            probe = HostAppProbe.run(controller: self)
+            if probe.bundleID == nil { probe.code += "." + HostArbiterWatch.shared.summary }
+        }
         if openContainingApp(VoiceSessionRenewal.url(returningTo: probe.bundleID, probe: probe.code)) {
             voiceMessage = "正在打开 Lab 开启语音会话，马上回来…"
         } else {
