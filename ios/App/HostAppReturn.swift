@@ -13,7 +13,10 @@ import UIKit
 /// below can be returned to; others get the "◀" hint.
 final class HostAppReturn: NSObject {
     static let shared = HostAppReturn()
-    private var observed: NSObject?
+    /// Every `_UIRemoteKeyboards` instance being observed. Kept strongly so
+    /// none is deallocated while observed.
+    private var observedKeyboards: [NSObject] = []
+    private var started = false
     private var lastHost: (id: String, at: Date)?
     private var backgroundedAt: Date?
 
@@ -79,18 +82,151 @@ final class HostAppReturn: NSObject {
 
     /// Start watching the system keyboard state. Call once at launch.
     func start() {
-        guard observed == nil, let type = NSClassFromString("_UIRemoteKeyboards") else { return }
-        let shared = NSSelectorFromString("sharedRemoteKeyboards")
-        let typeObject = type as AnyObject
-        guard typeObject.responds(to: shared),
-              let keyboards = typeObject.perform(shared)?.takeUnretainedValue() as? NSObject,
-              keyboards.responds(to: NSSelectorFromString("currentState")) else { return }
-        observed = keyboards
-        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
-                                               object: nil, queue: .main) { [weak self] _ in
+        guard !started else { return }
+        started = true
+        let center = NotificationCenter.default
+        center.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                           object: nil, queue: .main) { [weak self] _ in
             self?.backgroundedAt = Date()
         }
-        keyboards.addObserver(self, forKeyPath: "currentState", options: [.new, .initial], context: nil)
+        for name in [UIApplication.willEnterForegroundNotification, UIApplication.didBecomeActiveNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.attachKeyboardObservers()
+            }
+        }
+        attachKeyboardObservers()
+    }
+
+    /// Observes every `_UIRemoteKeyboards` instance that can be found.
+    ///
+    /// On recent iOS the class-level `sharedRemoteKeyboards` object no longer
+    /// receives the host app's keyboard state; the live instance hangs off the
+    /// window scene's keyboard scene delegate and may only exist once Lab is
+    /// on screen. Safe to call repeatedly: known instances are skipped, and
+    /// `.initial` reports the value a new instance already holds (the state is
+    /// transient, so it must be caught when it arrives, not polled later).
+    func attachKeyboardObservers() {
+        let currentState = NSSelectorFromString("currentState")
+        for keyboards in Self.remoteKeyboardCandidates()
+        where keyboards.responds(to: currentState) && !observedKeyboards.contains(where: { $0 === keyboards }) {
+            observedKeyboards.append(keyboards)
+            keyboards.addObserver(self, forKeyPath: "currentState", options: [.new, .initial], context: nil)
+        }
+    }
+
+    private static func remoteKeyboardCandidates() -> [NSObject] {
+        guard let remoteClass = NSClassFromString("_UIRemoteKeyboards") else { return [] }
+        var found: [NSObject] = []
+        func add(_ object: NSObject?) {
+            guard let object, object.isKind(of: remoteClass),
+                  !found.contains(where: { $0 === object }) else { return }
+            found.append(object)
+        }
+        add(classObject(remoteClass, "sharedRemoteKeyboards"))
+        var delegates: [NSObject] = []
+        if let sceneDelegateClass = NSClassFromString("UIKeyboardSceneDelegate") {
+            for name in ["automaticKeyboardArbiterClient", "keyboardArbiterClient"] {
+                add(classObject(sceneDelegateClass, name))
+            }
+            if let active = classObject(sceneDelegateClass, "activeKeyboardSceneDelegate") {
+                delegates.append(active)
+            }
+        }
+        for scene in UIApplication.shared.connectedScenes {
+            for name in ["_registeredComponents", "_sceneComponents"] {
+                guard let components = object(scene, name) else { continue }
+                var values: [NSObject] = []
+                let lookup = NSSelectorFromString("objectForKey:")
+                if components.responds(to: lookup),
+                   let hit = components.perform(lookup, with: "_UIKeyboardSceneDelegateSceneComponentKey")?
+                       .takeUnretainedValue() as? NSObject {
+                    values.append(hit)
+                }
+                values += members(of: components).filter {
+                    NSStringFromClass(type(of: $0)).contains("KeyboardSceneDelegate")
+                }
+                for value in values where !delegates.contains(where: { $0 === value }) {
+                    delegates.append(value)
+                }
+            }
+        }
+        for delegate in delegates {
+            for name in ["arbiterClient", "keyboardArbiterClient", "remoteKeyboards"] {
+                add(object(delegate, name))
+            }
+            // UIKeyboardSceneDelegate → container window → editing overlay
+            // controller → its parent (input window controller) → hosting →
+            // hosting items → each item's controller delegate.
+            guard let window = object(delegate, "containerWindow"),
+                  let overlay = object(window, "editingOverlayViewController") else { continue }
+            var parentCandidate: NSObject? = object(overlay, "parentViewController")
+            if let controller = overlay as? UIViewController, let up = controller.parent { parentCandidate = up }
+            guard let parent = parentCandidate, let hosting = object(parent, "hosting"),
+                  let items = object(hosting, "hostingItems") else { continue }
+            for item in members(of: items) {
+                add(item)
+                add(object(item, "controllerDelegate"))
+            }
+        }
+        return found
+    }
+
+    /// Elements of an array, set, pointer array, hash table, dictionary or map table.
+    private static func members(of container: NSObject) -> [NSObject] {
+        if let array = container as? NSArray { return array.compactMap { $0 as? NSObject } }
+        if let set = container as? NSSet { return set.allObjects.compactMap { $0 as? NSObject } }
+        if let dictionary = container as? NSDictionary { return dictionary.allValues.compactMap { $0 as? NSObject } }
+        for name in ["allObjects", "objectEnumerator"] {
+            guard let value = getter(container, name) else { continue }
+            if let array = value as? NSArray { return array.compactMap { $0 as? NSObject } }
+            if let enumerator = value as? NSEnumerator { return enumerator.allObjects.compactMap { $0 as? NSObject } }
+        }
+        return []
+    }
+
+    /// Calls a no-argument, object-returning class method if it exists.
+    private static func classObject(_ cls: AnyClass, _ name: String) -> NSObject? {
+        let selector = NSSelectorFromString(name)
+        guard let method = class_getClassMethod(cls, selector),
+              method_getNumberOfArguments(method) == 2, returnsObject(method) else { return nil }
+        let receiver = cls as AnyObject
+        return receiver.perform(selector)?.takeUnretainedValue() as? NSObject
+    }
+
+    /// Reads `name` through a getter (`name`, then `_name`), else through an
+    /// object-typed ivar (`_name`, then `name`).
+    private static func object(_ owner: NSObject, _ name: String) -> NSObject? {
+        let bare = name.hasPrefix("_") ? String(name.dropFirst()) : name
+        if let value = getter(owner, bare) ?? getter(owner, "_" + bare) { return value }
+        for ivarName in ["_" + bare, bare] {
+            guard let ivar = class_getInstanceVariable(type(of: owner), ivarName),
+                  let encoding = ivar_getTypeEncoding(ivar), String(cString: encoding).hasPrefix("@"),
+                  let value = object_getIvar(owner, ivar) as? NSObject else { continue }
+            return value
+        }
+        return nil
+    }
+
+    private static func getter(_ owner: NSObject, _ name: String) -> NSObject? {
+        let selector = NSSelectorFromString(name)
+        guard owner.responds(to: selector),
+              let method = class_getInstanceMethod(type(of: owner), selector),
+              method_getNumberOfArguments(method) == 2, returnsObject(method) else { return nil }
+        return owner.perform(selector)?.takeUnretainedValue() as? NSObject
+    }
+
+    private static func returnsObject(_ method: Method) -> Bool {
+        var type = [CChar](repeating: 0, count: 8)
+        method_getReturnType(method, &type, type.count)
+        return type[0] == CChar(UInt8(ascii: "@"))
+    }
+
+    /// The host named by any observed keyboard state right now.
+    private func currentHost() -> String? {
+        for keyboards in observedKeyboards {
+            if let id = Self.source(of: Self.getter(keyboards, "currentState")) { return id }
+        }
+        return nil
     }
 
     override func observeValue(forKeyPath keyPath: String?, of object: Any?,
@@ -130,7 +266,7 @@ final class HostAppReturn: NSObject {
     /// to `HostReturnPolicy`; call again until it answers or time runs out.
     func host(reported: String?, requestedAt: Date) -> String? {
         let reported = HostBundleID.normalize(reported) ?? systemNavigationBundleID()
-        let current = Self.source(of: observed?.value(forKey: "currentState") as? NSObject)
+        let current = currentHost()
         let decision = HostReturnPolicy.decide(reported: reported, current: current, observed: lastHost,
                                                requestedAt: requestedAt, backgroundedAt: backgroundedAt, now: Date())
         guard case .open(let id) = decision else { return nil }
@@ -318,10 +454,10 @@ final class HostAppReturn: NSObject {
     /// Compact, privacy-free diagnostic code shown only when auto-return fails.
     func diagnosticSummary(reported: String?, probe: String? = nil) -> String {
         let nav = systemNavigationActions().count
-        let cur = Self.source(of: observed?.value(forKey: "currentState") as? NSObject) != nil ? 1 : 0
+        let cur = currentHost() != nil ? 1 : 0
         let obs = lastHost != nil ? 1 : 0
         let rep = reported.flatMap { Self.isOwn($0) ? nil : $0 } != nil ? 1 : 0
-        return "[nav:\(nav) kb:\(cur)/\(obs) rep:\(rep) kd:\(probe ?? "-")]"
+        return "[nav:\(nav) kb:\(cur)/\(obs)/\(observedKeyboards.count) rep:\(rep) kd:\(probe ?? "-")]"
     }
 
     /// A readable name for the status line.
