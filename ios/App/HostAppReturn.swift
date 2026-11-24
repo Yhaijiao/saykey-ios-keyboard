@@ -236,8 +236,10 @@ final class HostAppReturn: NSObject {
         let id = Self.source(of: state)
         let note = state.map { Self.stateNote($0) }
         let at = Date()
+        let dump = state.map { Self.dump($0, depth: 0) }
         DispatchQueue.main.async {
             self.events += 1
+            if let dump { self.stateDumps.append(dump); if self.stateDumps.count > 4 { self.stateDumps.removeFirst() } }
             if let note { self.statesSeen += 1; self.stateNotes.formUnion(note) }
             if let id { self.lastHost = (id, at) }
         }
@@ -248,6 +250,81 @@ final class HostAppReturn: NSObject {
     private var events = 0
     private var statesSeen = 0
     private var stateNotes = Set<Character>()
+    private var stateDumps: [String] = []
+
+    /// Layout of the last keyboard state objects (UIKit ivar names, types
+    /// and short values), so the user can paste it back when the host is
+    /// still not found on a new iOS version.
+    var stateDumpText: String {
+        "SayKey kb-state \(UIDevice.current.systemVersion) ev:\(events)\n" + stateDumps.joined(separator: "\n---\n")
+    }
+
+    /// nil when the class has no weak ivars; otherwise the ivars proven
+    /// strong by their property attributes.
+    private static func strongIvarNames(of cls: AnyClass) -> Set<String>? {
+        guard class_getWeakIvarLayout(cls) != nil else { return nil }
+        var count: UInt32 = 0
+        guard let props = class_copyPropertyList(cls, &count) else { return [] }
+        defer { free(props) }
+        var names = Set<String>()
+        for index in 0..<Int(count) {
+            guard let raw = property_getAttributes(props[index]) else { continue }
+            let attrs = String(cString: raw).split(separator: ",")
+            guard !attrs.contains("W") else { continue }
+            for attr in attrs where attr.hasPrefix("V") { names.insert(String(attr.dropFirst())) }
+        }
+        return names
+    }
+
+    private static func dump(_ object: NSObject, depth: Int) -> String {
+        var parts: [String] = []
+        var cls: AnyClass? = type(of: object)
+        while let current = cls, current != NSObject.self, parts.count < 40 {
+            var count: UInt32 = 0
+            if let ivars = class_copyIvarList(current, &count) {
+                defer { free(ivars) }
+                for index in 0..<Int(count) where parts.count < 40 {
+                    let ivar = ivars[index]
+                    guard let rawName = ivar_getName(ivar), let rawType = ivar_getTypeEncoding(ivar) else { continue }
+                    let name = String(cString: rawName)
+                    let encoding = String(cString: rawType)
+                    let base = Unmanaged.passUnretained(object).toOpaque().advanced(by: ivar_getOffset(ivar))
+                    var value = "?"
+                    switch encoding.first ?? " " {
+                    case "@":
+                        // Weak ivars are skipped: reading them raw is unsafe.
+                        if let allowed = strongIvarNames(of: current), !allowed.contains(name) { value = "w"; break }
+                        guard let child = object_getIvar(object, ivar) as AnyObject? else { value = "nil"; break }
+                        if let text = child as? String {
+                            value = "\"" + String(text.prefix(80)) + "\""
+                        } else if let number = child as? NSNumber {
+                            value = number.stringValue
+                        } else if let child = child as? NSObject {
+                            let childClass = NSStringFromClass(type(of: child))
+                            if depth < 2, !(child is UIView), !(child is CALayer), !(child is NSArray),
+                               !(child is NSDictionary), !(child is NSSet) {
+                                value = dump(child, depth: depth + 1)
+                            } else if let array = child as? NSArray {
+                                value = "\(childClass)[\(array.count)]"
+                            } else {
+                                value = childClass
+                            }
+                        }
+                    case "i": value = String(base.load(as: Int32.self))
+                    case "I": value = String(base.load(as: UInt32.self))
+                    case "q": value = String(base.load(as: Int64.self))
+                    case "Q": value = String(base.load(as: UInt64.self))
+                    case "B": value = String(base.load(as: Bool.self))
+                    case "c", "C": value = String(base.load(as: Int8.self))
+                    default: value = String(encoding.prefix(12))
+                    }
+                    parts.append("\(name)=\(value)")
+                }
+            }
+            cls = class_getSuperclass(current)
+        }
+        return NSStringFromClass(type(of: object)) + "{" + parts.joined(separator: "; ") + "}"
+    }
 
     /// String ivars of the state object worth reading for the host: getters
     /// can be missing on newer iOS while the backing ivar is still filled.
