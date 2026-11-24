@@ -40,7 +40,7 @@ SayKey 是一款 iPhone 第三方键盘：语音输入 + 离线拼音 + 英文�
 
 ### 版本号
 - 每次要发布的改动，在 `project.yml` 里同时加 `MARKETING_VERSION`（如 0.4.34 → 0.4.35）和 `CURRENT_PROJECT_VERSION`（47 → 48），并同步修改 `.github/workflows/build-ios.yml` 里 IPA 打包和 `verify_ipa.py` 的版本号。
-- 当前已发布：**v0.4.35（build 48）**。下一个是 **v0.4.36（build 49）**。
+- 当前已发布：**v0.4.36（build 49）**。下一个是 **v0.4.37（build 50）**。
 
 ### 发布
 - **一批功能全部做完后再发布一次**，不要每做一个功能就发一次；一批做到一半时不要发。

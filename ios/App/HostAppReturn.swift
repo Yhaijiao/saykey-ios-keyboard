@@ -224,38 +224,88 @@ final class HostAppReturn: NSObject {
     /// The host named by any observed keyboard state right now.
     private func currentHost() -> String? {
         for keyboards in observedKeyboards {
-            if let id = Self.source(of: Self.getter(keyboards, "currentState")) { return id }
+            if let id = Self.source(of: Self.object(keyboards, "currentState")) { return id }
         }
         return nil
     }
 
     override func observeValue(forKeyPath keyPath: String?, of object: Any?,
                                change: [NSKeyValueChangeKey: Any]?, context: UnsafeMutableRawPointer?) {
-        guard keyPath == "currentState", let state = change?[.newKey] as? NSObject,
-              let id = Self.source(of: state) else { return }
+        guard keyPath == "currentState" else { return }
+        let state = change?[.newKey] as? NSObject
+        let id = Self.source(of: state)
+        let note = state.map { Self.stateNote($0) }
         let at = Date()
-        DispatchQueue.main.async { self.lastHost = (id, at) }
+        DispatchQueue.main.async {
+            self.events += 1
+            if let note { self.statesSeen += 1; self.stateNotes.formUnion(note) }
+            if let id { self.lastHost = (id, at) }
+        }
+    }
+
+    /// Diagnostics: keyboard state events received, how many carried a
+    /// state object, and which kinds of identifier fields were non-empty.
+    private var events = 0
+    private var statesSeen = 0
+    private var stateNotes = Set<Character>()
+
+    /// String ivars of the state object worth reading for the host: getters
+    /// can be missing on newer iOS while the backing ivar is still filled.
+    private static func stringFields(of state: NSObject) -> [(name: String, value: String)] {
+        var result: [(name: String, value: String)] = []
+        var cls: AnyClass? = type(of: state)
+        while let current = cls, current != NSObject.self {
+            var count: UInt32 = 0
+            if let ivars = class_copyIvarList(current, &count) {
+                defer { free(ivars) }
+                for index in 0..<Int(count) {
+                    let ivar = ivars[index]
+                    guard let rawName = ivar_getName(ivar), let rawType = ivar_getTypeEncoding(ivar),
+                          String(cString: rawType) == "@\"NSString\"" else { continue }
+                    let name = String(cString: rawName)
+                    let lower = name.lowercased()
+                    guard lower.contains("bundle") || lower.contains("scene") || lower.contains("source")
+                            || lower.contains("host") || lower.contains("appid") else { continue }
+                    if let value = object_getIvar(state, ivar) as? String, !value.isEmpty {
+                        result.append((name: name, value: value))
+                    }
+                }
+            }
+            cls = class_getSuperclass(current)
+        }
+        return result
+    }
+
+    /// Privacy-free summary of a state: B = bundle-like field filled,
+    /// S = scene field filled, O = a field held only our own app or a
+    /// system overlay.
+    private static func stateNote(_ state: NSObject) -> Set<Character> {
+        var note = Set<Character>()
+        for field in stringFields(of: state) {
+            note.insert(field.name.lowercased().contains("scene") ? "S" : "B")
+            if HostBundleID.normalize(field.value) == nil { note.insert("O") }
+        }
+        return note
     }
 
     private static func source(of state: NSObject?) -> String? {
         guard let state else { return nil }
         for key in ["sourceBundleIdentifier", "hostBundleIdentifier", "sourceSceneIdentityString"] {
-            let sel = NSSelectorFromString(key)
-            if state.responds(to: sel),
-               let raw = state.perform(sel)?.takeUnretainedValue() as? String,
-               let id = HostBundleID.normalize(raw) {
+            if let raw = object(state, key) as? String, let id = HostBundleID.normalize(raw) {
                 return id
             }
         }
-        let sceneSel = NSSelectorFromString("sourceSceneIdentity")
-        if state.responds(to: sceneSel),
-           let identity = state.perform(sceneSel)?.takeUnretainedValue() as? NSObject {
-            let idSel = NSSelectorFromString("identifier")
-            if identity.responds(to: idSel),
-               let raw = identity.perform(idSel)?.takeUnretainedValue() as? String,
-               let id = HostBundleID.normalize(raw) {
-                return id
-            }
+        if let identity = object(state, "sourceSceneIdentity"),
+           let raw = object(identity, "identifier") as? String,
+           let id = HostBundleID.normalize(raw) {
+            return id
+        }
+        // Any other identifier-like string field, bundle fields first.
+        let fields = stringFields(of: state)
+        let ordered = fields.filter { $0.name.lowercased().contains("bundle") }
+            + fields.filter { !$0.name.lowercased().contains("bundle") }
+        for field in ordered {
+            if let id = HostBundleID.normalize(field.value) { return id }
         }
         return nil
     }
@@ -457,7 +507,7 @@ final class HostAppReturn: NSObject {
         let cur = currentHost() != nil ? 1 : 0
         let obs = lastHost != nil ? 1 : 0
         let rep = reported.flatMap { Self.isOwn($0) ? nil : $0 } != nil ? 1 : 0
-        return "[nav:\(nav) kb:\(cur)/\(obs)/\(observedKeyboards.count) rep:\(rep) kd:\(probe ?? "-")]"
+        return "[nav:\(nav) kb:\(cur)/\(obs)/\(observedKeyboards.count) ev:\(events)/\(statesSeen)\(String(stateNotes.sorted())) rep:\(rep) kd:\(probe ?? "-")]"
     }
 
     /// A readable name for the status line.
