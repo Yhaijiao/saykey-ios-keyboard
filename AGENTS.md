@@ -75,3 +75,7 @@ SayKey 是一款 iPhone 第三方键盘：语音输入 + 离线拼音 + 英文�
 | `docs/` | 中文文档：安装、发布、语音、云、热词等 |
 
 工作流程：键盘 → POST `/v1/voice/start|stop` → 主 App 录音并上传音频到桥接 → 桥接调用 CapsWriter-Offline 识别 → 热词纠错 → 键盘轮询 `/v1/voice/result` 拿到文字上屏。
+
+## 5. 现在先做什么
+
+先做 [docs/交接.md](docs/交接.md) 第 7 节「最新反馈（2026-11-24）」里的三项：① 修复主 App 没开时「跳主 App 再跳回」的回归（P0）；② 借鉴电脑版 CapsWriter 的去语气词 / 去口吃重复（P0）；③ 误触滑动。

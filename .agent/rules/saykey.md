@@ -17,3 +17,4 @@ trigger: always_on
 - iOS 只在 GitHub Actions 的 Mac 上编译（`build-ios.yml` 手动触发），模拟器测试默认不跑。
 - 合并前让 Jeremy 看 PR；一批合并且编译通过后直接发布，不用再问。
 - 隐私第一；能发出去比打磨重要；不做没要求的大重构。
+- 现在先做：docs/交接.md 第 7 节「最新反馈（2026-11-24）」的三项。
