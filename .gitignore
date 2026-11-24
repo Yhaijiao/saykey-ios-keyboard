@@ -12,3 +12,6 @@ __pycache__/
 *.ipa
 *.log
 bridge/speech-cleanup.txt
+bridge/llm-polish.txt
+bridge-background.ps1
+*.cmd
