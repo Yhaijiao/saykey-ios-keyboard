@@ -81,19 +81,29 @@ struct VoiceUndoRecord {
 enum VoiceSessionRenewal {
     /// Opened by the keyboard. Lab starts or extends the session to 60 minutes.
     static let url = URL(string: "capswriterlab://renew")!
-    static func url(returningTo bundleID: String?) -> URL {
-        guard let bundleID, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
-        parts.queryItems = [URLQueryItem(name: "return", value: bundleID)]
+    static func url(returningTo bundleID: String?, probe: String? = nil) -> URL {
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        var items: [URLQueryItem] = []
+        if let bundleID { items.append(URLQueryItem(name: "return", value: bundleID)) }
+        if let probe, isSafeToken(probe) { items.append(URLQueryItem(name: "kd", value: probe)) }
+        guard !items.isEmpty else { return url }
+        parts.queryItems = items
         return parts.url ?? url
     }
-    /// The app to send the user back to, if the keyboard could tell.
-    static func returnBundleID(from url: URL) -> String? {
+    private static func isSafeToken(_ value: String) -> Bool {
+        !value.isEmpty && value.count <= 200
+            && value.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" })
+    }
+    private static func query(_ name: String, in url: URL) -> String? {
         let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first(where: { $0.name == "return" })?.value
-        guard let value, !value.isEmpty, value.count <= 200,
-              value.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" }) else { return nil }
+            .queryItems?.first(where: { $0.name == name })?.value
+        guard let value, isSafeToken(value) else { return nil }
         return value
     }
+    /// The app to send the user back to, if the keyboard could tell.
+    static func returnBundleID(from url: URL) -> String? { query("return", in: url) }
+    /// The keyboard's privacy-free host probe code, shown in Lab's diagnostics.
+    static func probeCode(from url: URL) -> String? { query("kd", in: url) }
     static let minutes = 60
     /// A return to the keyboard within this window still counts as the same tap.
     static let resumeWindow: TimeInterval = 120

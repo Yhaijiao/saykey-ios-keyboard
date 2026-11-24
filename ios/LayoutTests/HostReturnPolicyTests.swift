@@ -49,4 +49,19 @@ final class HostReturnPolicyTests: XCTestCase {
         XCTAssertEqual(decide(), .wait)
         XCTAssertEqual(decide(after: 1), .unknown)
     }
+
+    func testBundleIDNormalizesTeamPrefixAndSceneID() {
+        XCTAssertEqual(HostBundleID.normalize("com.apple.mobilenotes"), "com.apple.mobilenotes")
+        XCTAssertEqual(HostBundleID.normalize("88L2Q4487U.com.tencent.xin"), "com.tencent.xin")
+        XCTAssertEqual(HostBundleID.normalize("sceneID:com.apple.mobilenotes-default"), "com.apple.mobilenotes")
+        XCTAssertEqual(
+            HostBundleID.normalize("FBSSceneIdentity:sceneID%3Acom.my-company.app-7A3B4C5D-1111"),
+            "com.my-company.app"
+        )
+        XCTAssertNil(HostBundleID.normalize("sceneID:com.apple.InputUI-default"))
+        XCTAssertNil(HostBundleID.normalize("ABCD123456.org.capswriterlab.keyboard"))
+        XCTAssertEqual(HostBundleID.fromAppName("Notes"), "com.apple.mobilenotes")
+        XCTAssertEqual(HostBundleID.fromAppName("备忘录"), "com.apple.mobilenotes")
+        XCTAssertEqual(HostBundleID.fromAppName("微信"), "com.tencent.xin")
+    }
 }

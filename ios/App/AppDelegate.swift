@@ -23,8 +23,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         case "pair": controller.offerPairing(url); return true
         case "renew":
             let reported = VoiceSessionRenewal.returnBundleID(from: url)
-                ?? (options[.sourceApplication] as? String)
-            controller.renewFromKeyboard(returnTo: reported)
+                ?? HostAppReturn.sourceBundleID(fromOpenURLOptions: options)
+            controller.renewFromKeyboard(returnTo: reported, probe: VoiceSessionRenewal.probeCode(from: url))
             return true
         default: return false
         }
@@ -203,8 +203,9 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     /// The keyboard found the session lapsed and sent the user here. Start or
     /// extend it to 60 minutes; iOS only lets the user go back themselves,
     /// via the "◀" in the status bar, and the keyboard then starts recording.
-    func renewFromKeyboard(returnTo bundleID: String? = nil) {
+    func renewFromKeyboard(returnTo bundleID: String? = nil, probe: String? = nil) {
         view.endEditing(true)
+        keyboardProbe = probe
         guard let pairing = BridgePairingStore.activePairing(), !pairing.isExpired() else {
             voiceStatus.text = "请先在下方配对识别服务，再回键盘录音。"; return
         }
@@ -221,6 +222,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     }
 
     private var triedSystemReturn = false
+    private var keyboardProbe: String?
     private var returnToken = UUID()
     /// Once the microphone is on, go back to the app the keyboard was in.
     /// Lab is still coming to the foreground when the keyboard opens it, and
@@ -259,10 +261,10 @@ final class LabViewController: UIViewController, UITextViewDelegate {
                 return
             }
             if attempts == 75 || attempts == 1 {
-                let diag = HostAppReturn.shared.diagnosticSummary(reported: reported)
-                let source = found.map { "检测到来源：\(HostAppReturn.displayName($0))，正在尝试返回" } ?? "没确认这次的来源 App \(diag)"
+                let diag = HostAppReturn.shared.diagnosticSummary(reported: reported, probe: keyboardProbe)
+                let source = found.map { "检测到来源：\(HostAppReturn.displayName($0))，正在尝试返回" } ?? "未认出来源 \(diag)"
                 navigationItem.prompt = voice.active
-                    ? "语音会话已续上 · \(source) · 也可点左上角「◀」返回"
+                    ? "已续上 · \(source) · 点左上角◀返回"
                     : "语音会话还没开启 · \(source)"
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
