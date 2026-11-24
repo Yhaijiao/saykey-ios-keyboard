@@ -70,9 +70,26 @@ class RuleTests(unittest.TestCase):
     def test_punctuation_is_preserved(self):
         self.check([
             ('今天天气不错，我们去公园吧！你觉得呢？', '今天天气不错，我们去公园吧！你觉得呢？'),
-            ('第一，嗯，要准时；第二，呃，要带电脑。', '第一，要准时；第二，要带电脑。'),
+            ('第一，嗯，要准时；第二，呃，要带电脑。', '第1，要准时；第2，要带电脑。'),
             ('他说：“嗯，可以。”', '他说：“可以。”'),
         ])
+
+    def test_arabic_numbers_p1(self):
+        # All P1 examples from docs/从CapsWriter移植的语音优化.md.
+        self.check([
+            ('第一，Q一，Q二，功能添加三', '第1，Q1，Q2，功能添加3'),
+            ('三版方案', '3版方案'),
+            ('十月二十二', '10月22'),
+            ('二和3、两到3期', '2和3、2到3期'),
+            ('第一时间、第三方、安全第一', '第一时间、第三方、安全第一'),
+            ('独一无二、接二连三、乱七八糟', '独一无二、接二连三、乱七八糟'),
+            ('进一步、一张嘴', '进一步、一张嘴'),
+            # Additional safe boundary cases.
+            ('十二月五号开会', '12月5号开会'),
+            ('3到五轮测试', '3到5轮测试'),
+            ('周一和星期三见', '周一和星期三见'),
+        ])
+        self.assertEqual(Rules(parse('arabic_numbers = off')).clean('第一，Q一，三版方案'), '第一，Q一，三版方案')
 
     def test_switches_and_custom_lists(self):
         self.assertEqual(Rules(parse('enabled = off')).clean('嗯，我我想'), '嗯，我我想')
@@ -84,6 +101,51 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(Rules(parse('# note\nwhat = ever\nbroken line\nenabled ＝ on')).clean('嗯好'), '好')
         # Regex metacharacters in a user word are treated literally.
         self.assertEqual(Rules(parse('fillers_anywhere = ( [ .* +')).clean('嗯好'), '嗯好')
+
+    def test_capswriter_acceptance_cases(self):
+        # All 10 acceptance examples from docs/从CapsWriter移植的语音优化.md.
+        self.check([
+            ('嗯，我我我觉得这个这个方案呃还可以', '我觉得这个方案还可以'),
+            ('额，就是，就是我们先测试一下', '就是我们先测试一下'),
+            ('这个额度够不够啊', '这个额度够不够啊'),
+            ('好啊，对对对，没问题', '好啊，对对对，没问题'),
+            ('是是是不是要先检查检查', '是不是要先检查检查'),
+            ('我想想想再说', '我想再说'),
+            ('功能能不能用', '功能能不能用'),
+            ('其他他们都来了', '其他他们都来了'),
+            ('仅仅仅仅是这样', '仅仅是这样'),
+            ('um I I think the the plan works', 'I think the plan works'),
+        ])
+
+    def test_extended_stutter_and_filler_edges(self):
+        self.check([
+            # Extra English fillers and English repeat whitelist.
+            ('Uhm, erm, let us go.', 'let us go.'),
+            ('It is very very good, no no really really!', 'It is very very good, no no really really!'),
+            ('I had had that that book', 'I had had that that book'),
+            # Protected two-char prefixes before stutter chars.
+            ('这个目的的含义', '这个目的的含义'),
+            ('成都都下雨了', '成都都下雨了'),
+            ('一把把椅子', '一把把椅子'),
+            # Positive-negative question stutter vs normal phrasing.
+            ('需要要不要改', '需要要不要改'),
+            ('是是不是这样', '是不是这样'),
+            ('对了，能能不能行', '对了，能不能行'),
+            # Double-character words collapse 3+ to 2.
+            ('刚刚刚刚说完', '刚刚说完'),
+            # Comma-separated catchphrases and 3-10 char clauses (digits preserved).
+            ('然后，然后我们就出发', '然后我们就出发'),
+            ('我觉得，我觉得方案不错', '我觉得方案不错'),
+            ('今天下午，今天下午开会', '今天下午开会'),
+            ('第1版，第1版先发', '第1版，第1版先发'),
+            ('一二三，一二三开始', '一二三，一二三开始'),
+            # Standalone 额/啊 before 顿号 or at sentence end.
+            ('额、好的', '好的'),
+            ('好的，额', '好的'),
+            # ABAB reduplication whitelist vs stuttered 2-char words.
+            ('先确认确认再说', '先确认确认再说'),
+            ('方案方案定了', '方案定了'),
+        ])
 
     def test_long_text_is_fast(self):
         import time
