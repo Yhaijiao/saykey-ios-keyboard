@@ -49,15 +49,32 @@ final class HostAppReturn: NSObject {
         "com.laiwang.DingTalk": "dingtalk://"
     ]
 
-    private static let ignoredHosts: Set<String> = [
-        "com.apple.ScreenshotServicesService",
-        "com.apple.springboard",
-        "com.apple.Spotlight",
-        "com.apple.InputUI"
-    ]
-
     static func isOwn(_ bundleID: String) -> Bool {
-        bundleID.hasPrefix("org.capswriterlab") || ignoredHosts.contains(bundleID)
+        HostBundleID.isOwnOrSystemOverlay(bundleID)
+    }
+
+    static func sourceBundleID(fromOpenURLOptions options: [UIApplication.OpenURLOptionsKey: Any]) -> String? {
+        if let app = HostBundleID.normalize(options[.sourceApplication] as? String) {
+            return app
+        }
+        let handleKey = UIApplication.OpenURLOptionsKey(rawValue: "_UIApplicationOpenURLOptionsSourceProcessHandleKey")
+        if let handle = options[handleKey] as? NSObject {
+            for key in ["bundleIdentifier", "jobLabel"] {
+                let sel = NSSelectorFromString(key)
+                if handle.responds(to: sel),
+                   let raw = handle.perform(sel)?.takeUnretainedValue() as? String,
+                   let id = HostBundleID.normalize(raw) {
+                    return id
+                }
+            }
+            let nameSel = NSSelectorFromString("name")
+            if handle.responds(to: nameSel),
+               let name = handle.perform(nameSel)?.takeUnretainedValue() as? String,
+               let id = HostBundleID.executables[name] {
+                return id
+            }
+        }
+        return nil
     }
 
     /// Start watching the system keyboard state. Call once at launch.
@@ -85,10 +102,26 @@ final class HostAppReturn: NSObject {
     }
 
     private static func source(of state: NSObject?) -> String? {
-        guard let state, state.responds(to: NSSelectorFromString("sourceBundleIdentifier")),
-              let id = state.value(forKey: "sourceBundleIdentifier") as? String,
-              !id.isEmpty, !isOwn(id) else { return nil }
-        return id
+        guard let state else { return nil }
+        for key in ["sourceBundleIdentifier", "hostBundleIdentifier", "sourceSceneIdentityString"] {
+            let sel = NSSelectorFromString(key)
+            if state.responds(to: sel),
+               let raw = state.perform(sel)?.takeUnretainedValue() as? String,
+               let id = HostBundleID.normalize(raw) {
+                return id
+            }
+        }
+        let sceneSel = NSSelectorFromString("sourceSceneIdentity")
+        if state.responds(to: sceneSel),
+           let identity = state.perform(sceneSel)?.takeUnretainedValue() as? NSObject {
+            let idSel = NSSelectorFromString("identifier")
+            if identity.responds(to: idSel),
+               let raw = identity.perform(idSel)?.takeUnretainedValue() as? String,
+               let id = HostBundleID.normalize(raw) {
+                return id
+            }
+        }
+        return nil
     }
 
     /// The host to return to for a request that reached Lab at
@@ -96,7 +129,7 @@ final class HostAppReturn: NSObject {
     /// the host of an earlier visit when it wakes up, so the choice is left
     /// to `HostReturnPolicy`; call again until it answers or time runs out.
     func host(reported: String?, requestedAt: Date) -> String? {
-        let reported = reported.flatMap { Self.isOwn($0) ? nil : $0 } ?? systemNavigationBundleID()
+        let reported = HostBundleID.normalize(reported) ?? systemNavigationBundleID()
         let current = Self.source(of: observed?.value(forKey: "currentState") as? NSObject)
         let decision = HostReturnPolicy.decide(reported: reported, current: current, observed: lastHost,
                                                requestedAt: requestedAt, backgroundedAt: backgroundedAt, now: Date())
@@ -133,6 +166,16 @@ final class HostAppReturn: NSObject {
             if scene.responds(to: fbsSceneSel),
                let inner = scene.perform(fbsSceneSel)?.takeUnretainedValue() as? NSObject {
                 owners.append(inner)
+            }
+            let allCompSel = NSSelectorFromString("_allComponents")
+            if scene.responds(to: allCompSel),
+               let comps = scene.perform(allCompSel)?.takeUnretainedValue() as? NSArray {
+                for case let comp as NSObject in comps { owners.append(comp) }
+            }
+            if let ivar = class_getInstanceVariable(type(of: scene), "_sceneComponents"),
+               let enc = ivar_getTypeEncoding(ivar), String(cString: enc).hasPrefix("@"),
+               let dict = object_getIvar(scene, ivar) as? NSDictionary {
+                for case let comp as NSObject in dict.allValues { owners.append(comp) }
             }
         }
         var seen = Set<ObjectIdentifier>()
@@ -273,12 +316,12 @@ final class HostAppReturn: NSObject {
     }
 
     /// Compact, privacy-free diagnostic code shown only when auto-return fails.
-    func diagnosticSummary(reported: String?) -> String {
+    func diagnosticSummary(reported: String?, probe: String? = nil) -> String {
         let nav = systemNavigationActions().count
         let cur = Self.source(of: observed?.value(forKey: "currentState") as? NSObject) != nil ? 1 : 0
         let obs = lastHost != nil ? 1 : 0
         let rep = reported.flatMap { Self.isOwn($0) ? nil : $0 } != nil ? 1 : 0
-        return "[nav:\(nav) kb:\(cur)/\(obs) rep:\(rep)]"
+        return "[nav:\(nav) kb:\(cur)/\(obs) rep:\(rep) kd:\(probe ?? "-")]"
     }
 
     /// A readable name for the status line.

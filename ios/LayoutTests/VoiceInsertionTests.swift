@@ -45,4 +45,26 @@ final class VoiceInsertionTests: XCTestCase {
         XCTAssertNil(VoiceSessionRenewal.returnBundleID(from: VoiceSessionRenewal.url(returningTo: nil)))
         XCTAssertNil(VoiceSessionRenewal.returnBundleID(from: URL(string: "capswriterlab://renew?return=a%20b")!))
     }
+
+    func testRenewURLCarriesProbeCode() {
+        let url = VoiceSessionRenewal.url(returningTo: nil, probe: "w120T.p0")
+        XCTAssertEqual(url.host, "renew")
+        XCTAssertNil(VoiceSessionRenewal.returnBundleID(from: url))
+        XCTAssertEqual(VoiceSessionRenewal.probeCode(from: url), "w120T.p0")
+        let both = VoiceSessionRenewal.url(returningTo: "com.apple.mobilenotes", probe: "tdZtraits")
+        XCTAssertEqual(VoiceSessionRenewal.returnBundleID(from: both), "com.apple.mobilenotes")
+        XCTAssertEqual(VoiceSessionRenewal.probeCode(from: both), "tdZtraits")
+        XCTAssertNil(VoiceSessionRenewal.probeCode(from: VoiceSessionRenewal.url(returningTo: nil, probe: "a b")))
+    }
+
+    func testHostProbeAcceptsOnlyForeignBundleIDs() {
+        XCTAssertEqual(HostAppProbe.valid("com.apple.mobilenotes"), "com.apple.mobilenotes")
+        XCTAssertNil(HostAppProbe.valid("org.capswriterlab.keyboard"))
+        XCTAssertNil(HostAppProbe.valid("com.apple.InputUI"))
+        XCTAssertNil(HostAppProbe.valid("<null>"))
+        XCTAssertNil(HostAppProbe.valid("Notes"))
+        XCTAssertNil(HostAppProbe.valid("com.apple notes"))
+        XCTAssertEqual(HostBundleID.executables["MobileNotes"], "com.apple.mobilenotes")
+        XCTAssertEqual(HostAppProbe.sanitize("Mobile-Notes 2!"), "MobileNotes2")
+    }
 }
