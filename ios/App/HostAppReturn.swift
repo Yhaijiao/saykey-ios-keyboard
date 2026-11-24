@@ -25,7 +25,6 @@ final class HostAppReturn: NSObject {
         "com.apple.mobilenotes": "mobilenotes://",
         "com.apple.mobilemail": "message://",
         "com.apple.reminders": "x-apple-reminderkit://",
-        "com.apple.mobilesafari": "x-web-search://",
         "com.anthropic.claude": "claude://",
         "com.openai.chat": "chatgpt://",
         "com.google.Gmail": "googlegmail://",
@@ -157,11 +156,14 @@ final class HostAppReturn: NSObject {
         return names[bundleID] ?? bundleID
     }
 
-    /// Opens the host app. Returns false when it isn't in the catalog.
+    /// Opens the host app by URL scheme. Returns false when it isn't in the
+    /// catalog; if iOS rejects the scheme asynchronously, `onFailure` runs.
     @discardableResult
-    func open(_ bundleID: String) -> Bool {
+    func open(_ bundleID: String, onFailure: (() -> Void)? = nil) -> Bool {
         guard let raw = Self.schemes[bundleID], let url = URL(string: raw) else { return false }
-        UIApplication.shared.open(url)
+        UIApplication.shared.open(url, options: [:]) { opened in
+            if !opened { onFailure?() }
+        }
         return true
     }
 }
