@@ -738,13 +738,43 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         return false
     }
     /// The host app's bundle ID, when iOS still reports it, so Lab can send
-    /// the user straight back. Newer iOS versions usually hide it.
+    /// the user straight back even after a cold launch or suspension.
     private var hostBundleID: String? {
-        let key = "_hostBundleID"
-        guard let parent = parent, parent.responds(to: NSSelectorFromString(key)),
-              let id = parent.value(forKey: key) as? String,
-              !id.isEmpty, id != "<null>", !id.hasPrefix("org.capswriterlab") else { return nil }
+        if let parent = parent {
+            for key in ["_hostBundleID", "_hostApplicationBundleIdentifier"] {
+                if parent.responds(to: NSSelectorFromString(key)),
+                   let id = Self.validHostBundleID(parent.value(forKey: key) as? String) {
+                    return id
+                }
+            }
+        }
+        return Self.remoteKeyboardSourceBundleID()
+    }
+    private static func validHostBundleID(_ raw: String?) -> String? {
+        guard let id = raw, !id.isEmpty, id != "<null>",
+              !id.hasPrefix("org.capswriterlab"),
+              ![
+                "com.apple.ScreenshotServicesService",
+                "com.apple.springboard",
+                "com.apple.Spotlight",
+                "com.apple.InputUI"
+              ].contains(id) else { return nil }
         return id
+    }
+    /// Reads the active host app from `_UIRemoteKeyboards` while the keyboard
+    /// extension itself is live in the foreground, because a suspended or cold-
+    /// launched Lab receives no background keyboard-state events.
+    private static func remoteKeyboardSourceBundleID() -> String? {
+        guard let type = NSClassFromString("_UIRemoteKeyboards") else { return nil }
+        let shared = NSSelectorFromString("sharedRemoteKeyboards")
+        let typeObject = type as AnyObject
+        guard typeObject.responds(to: shared),
+              let keyboards = typeObject.perform(shared)?.takeUnretainedValue() as? NSObject,
+              keyboards.responds(to: NSSelectorFromString("currentState")),
+              let state = keyboards.value(forKey: "currentState") as? NSObject,
+              state.responds(to: NSSelectorFromString("sourceBundleIdentifier")),
+              let id = state.value(forKey: "sourceBundleIdentifier") as? String else { return nil }
+        return validHostBundleID(id)
     }
     private var canOpenContainingApp: Bool {
         let selector = NSSelectorFromString("openURL:options:completionHandler:")
