@@ -35,6 +35,18 @@ class RuleTests(unittest.TestCase):
             ('I think uh we should go', 'I think we should go'),
         ])
 
+    def test_trailing_english_ack_after_chinese_is_dropped(self):
+        self.check([
+            ('上一句话就可以看见有一个问题。Yeah.', '上一句话就可以看见有一个问题。'),
+            ('我们明天开会，yes', '我们明天开会。'),
+            ('我们明天开会Yeah。', '我们明天开会。'),
+            ('好的。Yep!', '好的。'),
+            # Kept: an English sentence, a meaningful yes, a mid-text yeah.
+            ('Yes, we can do it. Yeah.', 'Yes, we can do it. Yeah.'),
+            ('答案是yes。', '答案是yes。'),
+            ('Yeah，我觉得可以。', 'Yeah，我觉得可以。'),
+        ])
+
     def test_normal_words_survive(self):
         unchanged = [
             '我要那个。', '那个人是谁？', '把那个给我，谢谢。', '这个，那个，还有那个都要。',

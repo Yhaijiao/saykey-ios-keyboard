@@ -239,6 +239,41 @@ def _convert_arabic_numbers(text):
     return text
 
 
+# The desktop model sometimes adds "Yeah." or "Yes." after Chinese speech,
+# heard in the trailing silence. Drop it only as the last clause of text that
+# is otherwise Chinese, so "Yes, we can" or an English answer stays.
+_TRAILING_ACKS = {'yeah', 'yes', 'yep', 'yup', 'yeah yeah', 'uh huh', 'mm hmm'}
+_HAS_CJK = re.compile('[' + CJK + ']')
+
+
+_GLUED_ACK = re.compile('(?<=[' + CJK + r'])\s*(?:yeah|yep|yup)\s*$', re.IGNORECASE)  # not "yes": "答案是yes"
+
+
+def _drop_trailing_english_ack(kept):
+    # The split leaves an empty clause after the final mark.
+    while kept and not kept[-1][0].strip() and not kept[-1][1].strip():
+        kept = kept[:-1]
+    if not kept:
+        return kept
+    # "我们明天开会Yeah。" with no mark in between.
+    glued = _GLUED_ACK.sub('', kept[-1][0])
+    if glued != kept[-1][0]:
+        kept = kept[:-1] + [[glued, kept[-1][1] or '']]
+        return kept
+    if len(kept) < 2:
+        return kept
+    last = re.sub(r'[\s\-]+', ' ', kept[-1][0]).strip().lower()
+    if last not in _TRAILING_ACKS:
+        return kept
+    if not any(_HAS_CJK.search(clause) for clause, _ in kept[:-1]):
+        return kept
+    kept = kept[:-1]
+    punct = kept[-1][1].strip()
+    if not punct or punct[0] in SOFT:
+        kept[-1][1] = '。'
+    return kept
+
+
 def _on(value):
     return value.strip().lower() not in ('off', 'false', '0', 'no', '关', '关闭')
 
@@ -407,6 +442,7 @@ class Rules:
                 # "好的，嗯。" -> "好的。"   "好的，嗯" -> "好的"
                 kept[-1][1] = punct
         kept = self._collapse_comma_repeats(kept)
+        kept = _drop_trailing_english_ack(kept)
         result = ''.join(clause + punct for clause, punct in kept)
         # Clean stray leading punctuation or trailing comma after removals.
         result = re.sub('^[' + re.escape(SOFT + '、') + r']+\s*', '', result)

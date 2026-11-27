@@ -7,7 +7,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         HostAppReturn.shared.start()
         let window = UIWindow(frame: UIScreen.main.bounds)
-        window.rootViewController = UINavigationController(rootViewController: LabViewController())
+        let navigation = UINavigationController(rootViewController: LabViewController())
+        navigation.isNavigationBarHidden = true  // the page header shows the name
+        window.rootViewController = navigation
         window.overrideUserInterfaceStyle = .light
         window.tintColor = Theme.aqua
         window.makeKeyAndVisible()
@@ -61,22 +63,33 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "SayKey Lab"
-        navigationItem.titleView = UIView()  // the header below shows the name
-        let bar = UINavigationBarAppearance()
-        bar.configureWithTransparentBackground()
-        bar.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterialLight)
-        navigationItem.standardAppearance = bar
-        navigationItem.scrollEdgeAppearance = bar
         UserDefaults.standard.register(defaults: ["voice.autoStart": true])
         Theme.installBackground(in: view)
+        // The page header shows the name, so the empty navigation bar only
+        // took 44 pt at the top and clipped the page there, while the bottom
+        // stopped above the home indicator. Without it, the page runs edge to
+        // edge and the scroll view keeps the safe areas as insets.
         scroll.keyboardDismissMode = .interactive
+        scroll.contentInsetAdjustmentBehavior = .always
         scroll.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scroll)
+        view.keyboardLayoutGuide.usesBottomSafeArea = false
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            scroll.topAnchor.constraint(equalTo: view.topAnchor),
             scroll.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+        // Keep the clock readable when the page scrolls under the status bar.
+        let statusBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialLight))
+        statusBlur.translatesAutoresizingMaskIntoConstraints = false
+        statusBlur.isUserInteractionEnabled = false
+        view.addSubview(statusBlur)
+        NSLayoutConstraint.activate([
+            statusBlur.topAnchor.constraint(equalTo: view.topAnchor),
+            statusBlur.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            statusBlur.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            statusBlur.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
         let stack = UIStackView()
         stack.axis = .vertical; stack.spacing = 16
