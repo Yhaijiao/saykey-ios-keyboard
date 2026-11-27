@@ -3,8 +3,9 @@
 The live preview marks each pause in the speech. The audio up to that pause
 is sent to the accurate desktop model and then polished, while the user keeps
 talking, so the draft on the phone turns into finished sentences one by one.
-At stop only the last sentence still needs recognition; the whole text then
-gets one final paragraph pass. Everything stays in memory.
+These results are for the live draft only: the pause marks can land inside a
+word, so at stop the whole recording is recognized again and that text, after
+one paragraph pass, is the result. Everything stays in memory.
 """
 from __future__ import annotations
 import queue
@@ -70,6 +71,10 @@ class SentencePipeline:
             if entry is None:
                 return
             item, index, pcm = entry
+            # After stop or cancel nobody shows these any more; skip them so
+            # the desktop model is free for the whole-recording pass.
+            if self.finishing:
+                continue
             try:
                 raw = self.recognize(pcm, index) if len(pcm) >= MIN_SEGMENT_BYTES else ''
                 if not isinstance(raw, str):
@@ -79,7 +84,6 @@ class SentencePipeline:
                     self.failed = True
                 continue
             text = raw
-            # Once the user has stopped, only the final paragraph pass matters.
             if raw.strip() and not self.finishing:
                 try:
                     text = self.polish(raw)
@@ -94,18 +98,6 @@ class SentencePipeline:
         with self.lock:
             parts = [item['text'] if item['text'] is not None else item['draft'] for item in self.items]
         return join_text(parts + [live])
-
-    def finish(self, timeout):
-        """Stop taking sentences and wait for the queued ones. Returns their
-        raw texts in order, or None when any failed or did not finish."""
-        with self.lock:
-            self.finishing = True
-        self.queue.put(None)
-        self.thread.join(timeout)
-        with self.lock:
-            if self.thread.is_alive() or self.failed or any(item['raw'] is None for item in self.items):
-                return None
-            return [item['raw'] for item in self.items]
 
     def abandon(self):
         with self.lock:

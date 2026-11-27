@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 
-from sentences import SentencePipeline, join_text, MIN_SEGMENT_BYTES
+from sentences import SentencePipeline
 
 RATE = 16000
 MAX_SECONDS = 300
@@ -24,9 +24,6 @@ AGENT_WINDOW = 8
 # Upload time for a whole segment once the phone has started sending it.
 RECEIVE_SECONDS = 200
 ACTIVE_STATES = ('pending', 'recording', 'stopping', 'receiving', 'processing')
-# How long stop waits for sentences still being recognized before it falls
-# back to recognizing the whole recording at once.
-SENTENCE_WAIT = 30
 # One live chunk may carry up to 10 s, so the phone can catch up after a blip.
 MAX_CHUNK_S16 = RATE * 2 * 10
 
@@ -355,25 +352,12 @@ class VoiceRelay:
             sentences, self.sentences = self.sentences, None
             self.audio = bytearray(); self.preview_session = None
             self._set_state('processing')
+        # The per-sentence results were only for the live draft. The pause
+        # marks of the streaming model can land inside a word, so the final
+        # text always comes from the whole recording, as before sentences.
         if sentences is not None:
-            raw = self._raw_from_sentences(job_id, pcm, sentences)
-            if raw:
-                return self._recognize(job_id, None, raw=raw)
+            sentences.abandon()
         return self._recognize(job_id, s16_to_f32(pcm))
-
-    def _raw_from_sentences(self, job_id, pcm, sentences):
-        """Sentences already recognized while recording, plus the last one.
-        None means use the whole recording instead."""
-        raws = sentences.finish(SENTENCE_WAIT)
-        if raws is None:
-            return None
-        tail = pcm[sentences.end:]
-        try:
-            if len(tail) >= MIN_SEGMENT_BYTES:
-                raws.append(self.recognizer.transcribe(s16_to_f32(tail), f'{job_id}-tail'))
-        except Exception:
-            return None
-        return join_text(raws)
 
     def _set_state(self, state):
         self.job['state'] = state
