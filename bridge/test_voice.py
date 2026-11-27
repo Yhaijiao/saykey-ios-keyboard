@@ -349,7 +349,7 @@ class SentencePipelineTests(unittest.TestCase):
             threading.Event().wait(.01)
         self.fail('timed out')
 
-    def test_sentences_are_finished_while_recording_and_joined_at_stop(self):
+    def test_sentences_show_while_recording_but_final_text_is_whole_recording(self):
         second = b'\x10\x00' * 16000
         self.chunk(0, second)
         self.wait_for(lambda: self.relay.sentences.display('') == '第1句。')
@@ -360,11 +360,30 @@ class SentencePipelineTests(unittest.TestCase):
         self.relay.stop(self.job_id)
         result = self.relay.finish_stream(self.job_id, self.agent, 80000)
         self.assertEqual(result['state'], 'done')
-        self.assertEqual(result['text'], '第1句。第2句。第3句。')
+        # Pause marks can split a word, so the sentence texts are never joined
+        # into the result: the whole recording is recognized once more.
+        self.assertEqual(result['text'], '整段')
         ids = [task for task, _ in self.asr.calls]
-        self.assertEqual(ids, [f'{self.job_id}-s0', f'{self.job_id}-s1', f'{self.job_id}-tail'])
-        # float32 audio: each slice is twice its int16 size.
-        self.assertEqual([size for _, size in self.asr.calls], [64000, 64000, 32000])
+        self.assertEqual(ids[-1], self.job_id)
+        self.assertNotIn(f'{self.job_id}-tail', ids)
+        # float32 audio: twice the int16 size of all 2.5 s.
+        self.assertEqual(self.asr.calls[-1][1], 160000)
+
+    def test_pending_sentences_are_skipped_after_stop(self):
+        from sentences import SentencePipeline
+        gate, seen = threading.Event(), []
+        def recognize(pcm, index):
+            seen.append(index); gate.wait(5); return '句'
+        pipeline = SentencePipeline(recognize, lambda raw: raw)
+        pcm = b'\x10\x00' * 16000
+        pipeline.add(32000, pcm, '一')
+        pipeline.add(64000, pcm, '二')
+        self.wait_for(lambda: seen == [0])
+        pipeline.abandon()
+        gate.set()
+        pipeline.thread.join(2)
+        self.assertFalse(pipeline.thread.is_alive())
+        self.assertEqual(seen, [0])
 
     def test_draft_shows_until_sentence_is_recognized(self):
         self.asr.gate.clear()
